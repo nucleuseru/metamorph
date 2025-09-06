@@ -3,9 +3,8 @@ import cv2
 import threading
 import insightface
 from typing import Any
-import processors.config as config
 from insightface.model_zoo import inswapper
-from processors.utils import Face, IMAGE, get_one_face
+from processors.utils import Face, IMAGE, get_one_face, EXECUTION_PROVIDERS, MODELS_DIR
 
 
 THREAD_LOCK = threading.Lock()
@@ -19,12 +18,12 @@ def get_face_swapper() -> inswapper.INSwapper:
         if FACE_SWAPPER == None:
             model_name = "inswapper_128.onnx"
 
-            if "CUDAExecutionProvider" in config.execution_providers:
+            if "CUDAExecutionProvider" in EXECUTION_PROVIDERS:
                 model_name = "inswapper_128_fp16.onnx"
 
-            model_path = os.path.join(config.MODELS_DIR, model_name)
+            model_path = os.path.join(MODELS_DIR, model_name)
             FACE_SWAPPER = insightface.model_zoo.get_model(
-                model_path, providers=config.execution_providers
+                model_path, providers=EXECUTION_PROVIDERS
             )
 
     return FACE_SWAPPER
@@ -39,9 +38,6 @@ def swap_face(source_face: Face, target_face: Face, temp_img: IMAGE) -> IMAGE:
 
 
 def process_img(source_face: Face, temp_img: IMAGE):
-    if config.color_correction:
-        temp_img = cv2.cvtColor(temp_img, cv2.COLOR_BGR2RGB)
-
     target_face = get_one_face(temp_img)
     result = swap_face(source_face, target_face, temp_img)
     return result
