@@ -1,0 +1,6 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+onnx==1.18.0
+insightface==0.7.3
+pillow==11.1.0
+onnxruntime-gpu==1.22.0
