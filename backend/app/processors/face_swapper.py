@@ -7,8 +7,6 @@ import processors.config as config
 from insightface.model_zoo import inswapper
 from processors.utils import Face, IMAGE, get_one_face
 
-abs_dir = os.path.dirname(os.path.abspath(__file__))
-models_dir = os.path.join(os.path.dirname(os.path.dirname(abs_dir)), "models")
 
 THREAD_LOCK = threading.Lock()
 FACE_SWAPPER: Any = None
@@ -24,7 +22,7 @@ def get_face_swapper() -> inswapper.INSwapper:
             if "CUDAExecutionProvider" in config.execution_providers:
                 model_name = "inswapper_128_fp16.onnx"
 
-            model_path = os.path.join(models_dir, model_name)
+            model_path = os.path.join(config.MODELS_DIR, model_name)
             FACE_SWAPPER = insightface.model_zoo.get_model(
                 model_path, providers=config.execution_providers
             )

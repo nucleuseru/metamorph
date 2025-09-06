@@ -2,8 +2,10 @@ import os
 from typing import List, Dict
 
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKFLOW_DIR = os.path.join(ROOT_DIR, "workflow")
+MODELS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "models",
+)
 
 file_types = [
     ("Image", ("*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp")),
