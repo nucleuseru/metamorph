@@ -8,7 +8,10 @@ const interSans = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Metamorph",
+  title: {
+    default: "Metamorph",
+    template: "%s | Metamorph",
+  },
   description:
     "Metamorph lets you easily change faces and voices during live video calls.",
 };
