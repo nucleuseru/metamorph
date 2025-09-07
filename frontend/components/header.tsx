@@ -30,7 +30,7 @@ export default function Header() {
   return (
     <header>
       <div className="flex justify-between items-center p-4 max-w-6xl mx-auto">
-        <h1 className="font-semibold text-lg">Metamorph</h1>
+        <h1 className="font-bold text-lg tracking-widest">Metamorph</h1>
 
         <DropdownMenu>
           <DropdownMenuTrigger>

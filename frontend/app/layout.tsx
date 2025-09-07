@@ -1,6 +1,9 @@
+import "./globals.css";
+
+import Header from "@/components/header";
+import { Toaster } from "@/components/ui/sonner";
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import "./globals.css";
 
 const interSans = Inter({
   variable: "--font-inter-sans",
@@ -19,7 +22,13 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en">
-      <body className={`${interSans.variable} antialiased`}>{children}</body>
+      <body className={`${interSans.variable} antialiased`}>
+        <main className="min-h-dvh grid grid-rows-[auto_1fr]">
+          <Header />
+          {children}
+        </main>
+        <Toaster />
+      </body>
     </html>
   );
 }
