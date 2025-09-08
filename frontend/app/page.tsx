@@ -1,3 +1,9 @@
+import Header from "@/components/header";
+
 export default function Home() {
-  return <div></div>;
+  return (
+    <main className="min-h-dvh grid grid-rows-[auto_1fr]">
+      <Header />
+    </main>
+  );
 }

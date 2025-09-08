@@ -5,4 +5,4 @@ insightface==0.7.3
 onnxruntime-gpu==1.22.0
 opencv-python==4.10.0.84
 aiortc==1.13.0
-fastapi=0.116.1
+fastapi[standard]

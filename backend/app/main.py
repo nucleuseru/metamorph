@@ -2,7 +2,7 @@ import cv2
 import uuid
 import numpy as np
 from av import VideoFrame
-from typing import Any, Literal
+from typing import Any
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
 
@@ -34,27 +34,26 @@ class ProcessedVideo(VideoStreamTrack):
         self.room_id = room_id
 
     async def recv(self):
-        frame: VideoFrame = await self.source.recv()
-        img = frame.to_ndarray(format="bgr24")
-        face = rooms[self.room_id].face
-        result: Any = process_img(face, img)
+        try:
+            print("processing...")
+            frame: VideoFrame = await self.source.recv()
+            img = frame.to_ndarray(format="bgr24")
+            face = rooms[self.room_id].face
+            result: Any = process_img(face, img)
 
-        new_frame = VideoFrame.from_ndarray(result, format="bgr24")
-        new_frame.pts = frame.pts
-        new_frame.time_base = frame.time_base
+            new_frame = VideoFrame.from_ndarray(result, format="bgr24")
+            new_frame.pts = frame.pts
+            new_frame.time_base = frame.time_base
 
-        return new_frame
+            self.prev_frame = new_frame
 
+            return new_frame
 
-class Offer(RTCSessionDescription):
-    room_id: str
-    producer: bool
+        except Exception as e:
+            return self.prev_frame
 
-
-class WsData:
-    event: Literal["icecandidate", "offer"]
-    offer: Offer
-    icecandidate: RTCIceCandidate
+        finally:
+            print("processing completed")
 
 
 rooms: dict[str, Room] = dict()
@@ -96,10 +95,6 @@ async def websocket(ws: WebSocket, room_id: str, producer: bool):
     pc = RTCPeerConnection()
     room = rooms[room_id]
 
-    @pc.on("icecandidate")
-    async def on_icecandidate(icecandidate: RTCIceCandidate):
-        await ws.send_json({"event": "icecandidate", "icecandidate": icecandidate})
-
     if producer:
         room.producer = pc
 
@@ -107,15 +102,8 @@ async def websocket(ws: WebSocket, room_id: str, producer: bool):
         def on_track(track: MediaStreamTrack):
             if track.kind == "video":
                 room.videoTrack = track
-
-                if room.consumer:
-                    room.consumer.addTrack(ProcessedVideo(room_id, room.videoTrack))
-
             elif track.kind == "audio":
                 room.audioTrack = track
-
-                if room.consumer:
-                    room.consumer.addTrack(room.audioTrack)
 
     else:
         room.consumer = pc
@@ -127,20 +115,18 @@ async def websocket(ws: WebSocket, room_id: str, producer: bool):
 
     try:
         while True:
-            data: WsData = await ws.receive_json()
+            data = await ws.receive_json()
 
-            if data.event == "offer":
-                offer = RTCSessionDescription(data.offer.sdp, data.offer.type)
+            if data["event"] == "offer":
+                offer = RTCSessionDescription(**data["offer"])
                 await pc.setRemoteDescription(offer)
 
                 answer = await pc.createAnswer()
                 await pc.setLocalDescription(answer)
 
-                await ws.send_json({"event": "answer", "answer": answer})
-
-            elif data.event == "icecandidate":
-                candidate = RTCIceCandidate(**data.icecandidate)  # type: ignore
-                await pc.addIceCandidate(candidate)
+                await ws.send_json(
+                    {"event": "answer", "answer": pc.localDescription.__dict__}
+                )
 
     except WebSocketDisconnect:
         room = rooms[room_id]

@@ -1,7 +1,11 @@
 {
   "cSpell.words": [
+    "aiortc",
     "ANALYSER",
+    "frombuffer",
     "gfpgan",
+    "icecandidate",
+    "imdecode",
     "imread",
     "imwrite",
     "inswapper",

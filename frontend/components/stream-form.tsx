@@ -12,8 +12,14 @@ export default function StreamForm() {
   const [sourceFace, setSourceFace] = useState<File>();
   const [isStreaming, setStreaming] = useState(false);
   const [isAudioVideoEnabled, setAudioVideoEnabled] = useState(false);
+  const [localStream, setLocalStream] = useState<MediaStream>();
+
+  const [ws, setWs] = useState<WebSocket>();
+  const [peer, setPeer] = useState<RTCPeerConnection>();
 
   const handleStart = useCallback(async () => {
+    setError("");
+
     if (!sourceFace) {
       setError("Select a source face to start streaming");
       return;
@@ -25,11 +31,63 @@ export default function StreamForm() {
     }
 
     const formData = new FormData();
-    formData.append("source-face", sourceFace);
+    formData.append("file", sourceFace);
 
-    setError("");
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/setup`, {
+      method: "post",
+      body: formData,
+    });
+
+    const { success, data } = await res.json();
+
+    if (!success) {
+      setError(
+        "Failed to setup, please ensure your source face meet our guidelines"
+      );
+      return;
+    }
+
+    const peer = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+
+    peer.addTransceiver("video", { direction: "sendonly" });
+    peer.addTransceiver("audio", { direction: "sendonly" });
+
+    localStream!.getTracks().forEach((track) => {
+      peer.addTrack(track, localStream!);
+    });
+
+    const ws = new WebSocket(
+      `ws://localhost:8000/ws?room_id=${data.room_id}&producer=true`
+    );
+
+    setWs(ws);
+    setPeer(peer);
     setStreaming(true);
-  }, [sourceFace, isAudioVideoEnabled]);
+
+    peer.addEventListener("connectionstatechange", () => {
+      if (peer.connectionState === "connected") {
+        console.log(data.room_id);
+      }
+    });
+
+    ws.addEventListener("open", async () => {
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      ws.send(JSON.stringify({ event: "offer", offer: peer.localDescription }));
+    });
+
+    ws.addEventListener("message", async (event) => {
+      const data = JSON.parse(event.data);
+
+      if (data.event === "answer") {
+        await peer.setRemoteDescription(data.answer);
+      } else if (data.event === "icecandidate") {
+        await peer.addIceCandidate(data.icecandidate);
+      }
+    });
+  }, [sourceFace, isAudioVideoEnabled, localStream]);
 
   return (
     <div className="h-full flex flex-col-reverse gap-8 md:flex-row">
@@ -43,11 +101,16 @@ export default function StreamForm() {
 
         {!!error && <div className="text-destructive text-sm">{error}</div>}
 
-        <Button>Start streaming</Button>
+        {isStreaming ? (
+          <Button>Stop streaming</Button>
+        ) : (
+          <Button>Start streaming</Button>
+        )}
       </form>
 
       <div>
         <UserMedia
+          setMediaStream={setLocalStream}
           isAudioVideoEnabled={isAudioVideoEnabled}
           setAudioVideoEnabled={setAudioVideoEnabled}
         />
@@ -57,42 +120,27 @@ export default function StreamForm() {
 }
 
 function UserMedia({
+  setMediaStream,
   isAudioVideoEnabled,
   setAudioVideoEnabled,
 }: {
   isAudioVideoEnabled: boolean;
+  setMediaStream: (mediaStream: MediaStream) => void;
   setAudioVideoEnabled: (value: boolean) => void;
 }) {
-  const [mediaStream, setMediaStream] = useState<MediaStream>();
-
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const handleEnableAudioVideo = useCallback(async () => {
-    if (!mediaStream) return;
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 1920, height: 1080 },
+    const mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: { frameRate: { exact: 1 } },
       audio: true,
     });
 
-    mediaStream.getTracks().forEach((track) => {
-      mediaStream.removeTrack(track);
-    });
-
-    stream.getTracks().forEach((track) => {
-      mediaStream.addTrack(track);
-    });
+    videoRef.current!.srcObject = mediaStream;
 
     setAudioVideoEnabled(true);
-  }, [mediaStream, setAudioVideoEnabled]);
-
-  useEffect(() => {
-    if (videoRef.current) {
-      const mediaStream = new MediaStream();
-      videoRef.current.srcObject = mediaStream;
-      setMediaStream(mediaStream);
-    }
-  }, []);
+    setMediaStream(mediaStream);
+  }, [setAudioVideoEnabled, setMediaStream]);
 
   return (
     <div

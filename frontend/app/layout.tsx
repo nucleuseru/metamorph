@@ -23,10 +23,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en">
       <body className={`${interSans.variable} antialiased`}>
-        <main className="min-h-dvh grid grid-rows-[auto_1fr]">
-          <Header />
-          {children}
-        </main>
+        {children}
         <Toaster />
       </body>
     </html>
