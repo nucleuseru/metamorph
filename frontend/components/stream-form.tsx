@@ -132,7 +132,7 @@ function UserMedia({
 
   const handleEnableAudioVideo = useCallback(async () => {
     const mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { frameRate: { exact: 1 } },
+      video: true,
       audio: true,
     });
 

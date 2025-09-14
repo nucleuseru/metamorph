@@ -1,21 +1,19 @@
 import os
-import cv2
 import threading
-import insightface
-from typing import Any
-from insightface.model_zoo import inswapper
-from processors.utils import Face, IMAGE, get_one_face, EXECUTION_PROVIDERS, MODELS_DIR
 
+import insightface
+from insightface.model_zoo import inswapper
+from processors.utils import EXECUTION_PROVIDERS, IMAGE, MODELS_DIR, Face
 
 THREAD_LOCK = threading.Lock()
-FACE_SWAPPER: Any = None
+FACE_SWAPPER = None
 
 
 def get_face_swapper() -> inswapper.INSwapper:
     global FACE_SWAPPER
 
     with THREAD_LOCK:
-        if FACE_SWAPPER == None:
+        if FACE_SWAPPER is None:
             model_name = "inswapper_128.onnx"
 
             if "CUDAExecutionProvider" in EXECUTION_PROVIDERS:
@@ -26,18 +24,12 @@ def get_face_swapper() -> inswapper.INSwapper:
                 model_path, providers=EXECUTION_PROVIDERS
             )
 
-    return FACE_SWAPPER
+    return FACE_SWAPPER  # pyright: ignore[reportReturnType]
 
 
-def swap_face(source_face: Face, target_face: Face, temp_img: IMAGE) -> IMAGE:
+def swap_face(source_face: Face, target_face: Face, temp_img: IMAGE):
     face_swapper = get_face_swapper()
-    swapped_img: Any = face_swapper.get(
+    temp_img = face_swapper.get(
         temp_img, target_face, source_face, paste_back=True
-    )
-    return swapped_img
-
-
-def process_img(source_face: Face, temp_img: IMAGE):
-    target_face = get_one_face(temp_img)
-    result = swap_face(source_face, target_face, temp_img)
-    return result
+    )  # pyright: ignore[reportAssignmentType]
+    return temp_img

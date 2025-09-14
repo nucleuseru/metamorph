@@ -1,21 +1,18 @@
-import cv2
 import uuid
+
+import cv2
 import numpy as np
-from av import VideoFrame
-from typing import Any
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
-
-from processors.utils import get_one_face, Face
-from processors.face_swapper import process_img
-
 from aiortc import (
-    RTCSessionDescription,
-    RTCPeerConnection,
     MediaStreamTrack,
+    RTCPeerConnection,
+    RTCSessionDescription,
     VideoStreamTrack,
-    RTCIceCandidate,
 )
+from av import VideoFrame
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from processors.face_swapper import swap_face
+from processors.utils import IMAGE, Face, get_one_face
 
 
 class Room:
@@ -28,32 +25,42 @@ class Room:
 
 
 class ProcessedVideo(VideoStreamTrack):
-    def __init__(self, room_id: str, source):
+    def __init__(self, room_id: str, track):
         super().__init__()
-        self.source = source
+        self.track = track
         self.room_id = room_id
 
     async def recv(self):
+        frame = await self.track.recv()
+        pts = frame.pts
+        time_base = frame.time_base
+        frame = frame.to_ndarray(format="bgr24")
+
         try:
-            print("processing...")
-            frame: VideoFrame = await self.source.recv()
-            img = frame.to_ndarray(format="bgr24")
-            face = rooms[self.room_id].face
-            result: Any = process_img(face, img)
+            target_face = get_one_face(frame)
+        except:
+            frame = VideoFrame.from_ndarray(frame, format="bgr24")
+            frame.pts = pts
+            frame.time_base = time_base
 
-            new_frame = VideoFrame.from_ndarray(result, format="bgr24")
-            new_frame.pts = frame.pts
-            new_frame.time_base = frame.time_base
+            self.prev_frame = frame
 
-            self.prev_frame = new_frame
+            return frame
 
-            return new_frame
-
-        except Exception as e:
+        try:
+            frame = swap_face(rooms[self.room_id].face, target_face, frame)
+        except:
+            self.prev_frame.pts = pts
+            self.prev_frame.time_base = time_base
             return self.prev_frame
 
-        finally:
-            print("processing completed")
+        frame = VideoFrame.from_ndarray(frame, format="bgr24")  # type: ignore
+        frame.pts = pts
+        frame.time_base = time_base
+
+        self.prev_frame = frame
+
+        return frame
 
 
 rooms: dict[str, Room] = dict()
@@ -62,7 +69,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
@@ -73,9 +80,10 @@ app.add_middleware(
 async def setup(file: UploadFile = File(...)):
     try:
         contents = await file.read()
-        np_arr = np.frombuffer(contents, np.uint8)
-        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
+        img = np.frombuffer(contents, np.uint8)
+        img: IMAGE = cv2.imdecode(
+            img, cv2.IMREAD_COLOR
+        )  # pyright: ignore[reportAssignmentType]
         face = get_one_face(img)
 
         room_id = str(uuid.uuid4())
@@ -84,7 +92,6 @@ async def setup(file: UploadFile = File(...)):
         return {"success": True, "data": {"room_id": room_id}}
 
     except Exception as e:
-        print("set up error:", e)
         return {"success": False}
 
 
@@ -93,13 +100,21 @@ async def websocket(ws: WebSocket, room_id: str, producer: bool):
     await ws.accept()
 
     pc = RTCPeerConnection()
-    room = rooms[room_id]
+    room = rooms.get(room_id)
+
+    if room is None:
+        await ws.send_json({"event": "exception", "exception": "Invalid room id"})
+        await ws.close()
+        return
 
     if producer:
         room.producer = pc
 
         @pc.on("track")
         def on_track(track: MediaStreamTrack):
+            if not room:
+                return
+
             if track.kind == "video":
                 room.videoTrack = track
             elif track.kind == "audio":
@@ -109,7 +124,8 @@ async def websocket(ws: WebSocket, room_id: str, producer: bool):
         room.consumer = pc
 
         if room.videoTrack:
-            pc.addTrack(ProcessedVideo(room_id, room.videoTrack))
+            # pc.addTrack(ProcessedVideo(room_id, room.videoTrack))
+            pc.addTrack(room.videoTrack)
         if room.audioTrack:
             pc.addTrack(room.audioTrack)
 
@@ -129,7 +145,10 @@ async def websocket(ws: WebSocket, room_id: str, producer: bool):
                 )
 
     except WebSocketDisconnect:
-        room = rooms[room_id]
+        room = rooms.get(room_id)
+
+        if not room:
+            return
 
         if producer and room.producer:
             await room.producer.close()
