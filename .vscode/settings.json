@@ -1,0 +1,14 @@
+{
+  "remote.autoForwardPorts": false,
+  "prettier.prettierPath": "node_modules/prettier",
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "eslint.workingDirectories": [{ "mode": "auto" }],
+  "tailwindCSS.classFunctions": ["clsx", "cva", "tw", "twMerge"],
+  "tailwindCSS.classAttributes": [
+    "class",
+    "className",
+    "containerClassName",
+    "contentContainerClassName"
+  ]
+}
