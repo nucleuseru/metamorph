@@ -5,3 +5,4 @@ av
 python-dotenv
 pydantic-settings
 python-multipart
+numpy
