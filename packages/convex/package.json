@@ -1,0 +1,24 @@
+{
+  "name": "@repo/convex",
+  "version": "0.0.0",
+  "private": true,
+  "license": "ISC",
+  "exports": {
+    "./api": "./src/_generated/api.ts",
+    "./dataModel": "./src/_generated/dataModel.ts"
+  },
+  "scripts": {
+    "dev": "convex dev",
+    "lint": "eslint . --fix",
+    "check-types": "tsc --noEmit",
+    "clean": "rm -fr node_modules"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "@repo/tsconfig": "workspace:*",
+    "@types/node": "^20.19.41"
+  },
+  "dependencies": {
+    "convex": "^1.39.1"
+  }
+}
