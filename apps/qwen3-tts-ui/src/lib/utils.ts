@@ -3,8 +3,11 @@ import { fetchFile, toBlobURL } from "@ffmpeg/util";
 
 let ffmpeg: FFmpeg | null = null;
 
-export async function convertToMp3(
+export type AudioFormat = "mp3" | "ogg";
+
+export async function convertAudio(
   audioBlob: Blob,
+  format: AudioFormat,
   onProgress?: (progress: number) => void,
 ): Promise<Blob> {
   ffmpeg ??= new FFmpeg();
@@ -27,13 +30,23 @@ export async function convertToMp3(
   });
 
   const inputName = "input.wav";
-  const outputName = "output.mp3";
+  const outputName = `output.${format}`;
 
   await ffmpeg.writeFile(inputName, await fetchFile(audioBlob));
-  await ffmpeg.exec(["-i", inputName, "-b:a", "192k", outputName]);
+
+  const args = ["-i", inputName];
+
+  if (format === "mp3") {
+    args.push("-b:a", "192k", outputName);
+  } else {
+    args.push("-b:a", "128k", "-c:a", "libopus", outputName);
+  }
+
+  await ffmpeg.exec(args);
 
   const data = (await ffmpeg.readFile(outputName)) as Uint8Array;
-  return new Blob([data.buffer as BlobPart], { type: "audio/mp3" });
+  const mimeType = format === "mp3" ? "audio/mp3" : "audio/ogg";
+  return new Blob([data.buffer as BlobPart], { type: mimeType });
 }
 
 export async function convertToWav(file: File): Promise<Blob> {

@@ -1,5 +1,6 @@
 import {
-  convertToMp3,
+  AudioFormat,
+  convertAudio,
   fetchWithProgress,
   triggerFileDownload,
 } from "@/lib/utils";
@@ -13,26 +14,30 @@ export interface VoiceItemCardProps {
 
 export function VoiceItemCard({ name, src }: VoiceItemCardProps) {
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
-  const [isConverting, setIsConverting] = useState(false);
+  const [isConverting, setIsConverting] = useState<AudioFormat | null>(null);
 
-  const handleDownload = async () => {
+  const handleDownload = async (format: AudioFormat) => {
     if (!src) return;
 
     setDownloadProgress(0);
     try {
       const blob = await fetchWithProgress(src, setDownloadProgress);
 
-      setIsConverting(true);
+      setIsConverting(format);
       setDownloadProgress(0);
-      const mp3Blob = await convertToMp3(blob, setDownloadProgress);
+      const convertedBlob = await convertAudio(
+        blob,
+        format,
+        setDownloadProgress,
+      );
 
-      triggerFileDownload(mp3Blob, `${name}.mp3`);
+      triggerFileDownload(convertedBlob, `${name}.${format}`);
     } catch (error) {
-      console.error("Download or conversion failed:", error);
-      alert("Download failed. Please try again.");
+      console.error(`Download or conversion to ${format} failed:`, error);
+      alert(`Download failed for ${format}. Please try again.`);
     } finally {
       setDownloadProgress(null);
-      setIsConverting(false);
+      setIsConverting(null);
     }
   };
 
@@ -57,22 +62,46 @@ export function VoiceItemCard({ name, src }: VoiceItemCardProps) {
         {src && (
           <div className="flex shrink-0 items-center gap-2">
             <button
-              onClick={() => void handleDownload()}
-              disabled={downloadProgress !== null || isConverting}
-              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-bold text-white/80 shadow-sm backdrop-blur-md transition-all duration-200 hover:border-white hover:bg-white hover:text-black hover:shadow-[0_0_20px_rgba(255,255,255,0.2)] disabled:opacity-50"
+              onClick={() => void handleDownload("mp3")}
+              disabled={downloadProgress !== null || isConverting !== null}
+              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white/80 shadow-sm backdrop-blur-md transition-all duration-200 hover:border-white hover:bg-white hover:text-black hover:shadow-[0_0_20px_rgba(255,255,255,0.2)] disabled:opacity-50"
             >
-              {downloadProgress !== null || isConverting ? (
+              {isConverting === "mp3" ? (
                 <>
                   <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
-                  <span>
-                    {isConverting ? "Converting" : "Downloading"}{" "}
-                    {downloadProgress}%
-                  </span>
+                  <span>{downloadProgress}%</span>
+                </>
+              ) : downloadProgress !== null && isConverting === null ? (
+                <>
+                  <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
+                  <span>{downloadProgress}%</span>
                 </>
               ) : (
                 <>
                   <DownloadIcon className="h-3.5 w-3.5" />
-                  <span>Download</span>
+                  <span>MP3</span>
+                </>
+              )}
+            </button>
+            <button
+              onClick={() => void handleDownload("ogg")}
+              disabled={downloadProgress !== null || isConverting !== null}
+              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white/80 shadow-sm backdrop-blur-md transition-all duration-200 hover:border-white hover:bg-white hover:text-black hover:shadow-[0_0_20px_rgba(255,255,255,0.2)] disabled:opacity-50"
+            >
+              {isConverting === "ogg" ? (
+                <>
+                  <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
+                  <span>{downloadProgress}%</span>
+                </>
+              ) : downloadProgress !== null && isConverting === null ? (
+                <>
+                  <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
+                  <span>{downloadProgress}%</span>
+                </>
+              ) : (
+                <>
+                  <DownloadIcon className="h-3.5 w-3.5" />
+                  <span>OGG</span>
                 </>
               )}
             </button>
@@ -83,7 +112,7 @@ export function VoiceItemCard({ name, src }: VoiceItemCardProps) {
       {downloadProgress !== null && (
         <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
           <div
-            className={`h-full transition-all duration-300 ${isConverting ? "bg-blue-400 shadow-[0_0_8px_#60a5fa]" : "bg-emerald-400 shadow-[0_0_8px_#34d399]"}`}
+            className={`h-full transition-all duration-300 ${isConverting !== null ? "bg-blue-400 shadow-[0_0_8px_#60a5fa]" : "bg-emerald-400 shadow-[0_0_8px_#34d399]"}`}
             style={{ width: `${downloadProgress.toFixed(1)}%` }}
           />
         </div>
