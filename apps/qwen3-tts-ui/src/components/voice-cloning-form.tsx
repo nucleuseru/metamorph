@@ -10,10 +10,8 @@ import { StudioHeader } from "./studio-header";
 import { VoiceLibraryList } from "./voice-library-list";
 
 export function VoiceCloningForm({ sessionId }: { sessionId: string }) {
-  const [fileId, setFileId] = useState<Id<"file">>();
   const [selectedFileName, setSelectedFileName] = useState("");
 
-  const file = useQuery(api.file.getFile, fileId ? { id: fileId } : "skip");
   const files = useQuery(api.file.getFiles, { sessionId });
   const credits = files ? Math.max(0, 1000 - files.length * 10) : 0;
 
@@ -46,7 +44,7 @@ export function VoiceCloningForm({ sessionId }: { sessionId: string }) {
           storageId: Id<"_storage">;
         };
 
-        const fileId = await cloneVoice({
+        await cloneVoice({
           name,
           text,
           sessionId,
@@ -54,7 +52,6 @@ export function VoiceCloningForm({ sessionId }: { sessionId: string }) {
           ref_audio_storage_id: storageId,
         });
 
-        setFileId(fileId);
         setSelectedFileName("");
       } catch (error) {
         if (error instanceof Error) return error.message;
@@ -64,18 +61,15 @@ export function VoiceCloningForm({ sessionId }: { sessionId: string }) {
     null,
   );
 
-  const isGenerating = Boolean(fileId && file?.status === "generating");
-
   return (
     <div className="mx-auto max-w-6xl space-y-8 font-sans">
       <StudioHeader credits={credits - (isPending ? 10 : 0)} />
 
       <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-12">
         <CloneVoiceForm
-          formAction={formAction}
-          isPending={isPending}
-          isGenerating={isGenerating}
           error={error}
+          isPending={isPending}
+          formAction={formAction}
           selectedFileName={selectedFileName}
           onFileSelect={(file) => {
             setSelectedFileName(file?.name ?? "");

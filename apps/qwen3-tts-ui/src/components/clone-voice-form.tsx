@@ -3,24 +3,20 @@ import { FormFileDropzone, FormInput, FormTextarea } from "./form-controls";
 import { AlertIcon, SpinnerIcon, WaveIcon } from "./icons";
 
 export interface CloneVoiceFormProps {
-  formAction: (formData: FormData) => void;
   isPending: boolean;
-  isGenerating: boolean;
   error?: string | null;
   selectedFileName: string;
+  formAction: (formData: FormData) => void;
   onFileSelect: (file: File | null) => void;
 }
 
 export function CloneVoiceForm({
-  formAction,
-  isPending,
-  isGenerating,
   error,
-  selectedFileName,
+  isPending,
+  formAction,
   onFileSelect,
+  selectedFileName,
 }: CloneVoiceFormProps) {
-  const isDisabled = isPending || isGenerating;
-
   return (
     <section className="space-y-4 lg:col-span-7">
       <div className="flex items-center justify-between px-1">
@@ -83,19 +79,15 @@ export function CloneVoiceForm({
         />
 
         <button
-          disabled={isDisabled}
+          disabled={isPending}
           className="relative w-full overflow-hidden rounded-2xl bg-white p-4 text-sm font-bold text-black shadow-xl transition-all duration-300 hover:opacity-90 hover:shadow-[0_0_30px_rgba(255,255,255,0.3)] active:scale-[0.99] disabled:pointer-events-none disabled:opacity-50"
         >
           <div className="flex items-center justify-center gap-2.5">
-            {(isPending || isGenerating) && (
+            {isPending && (
               <SpinnerIcon className="h-5 w-5 animate-spin text-black" />
             )}
             <span>
-              {isPending
-                ? "Converting & Uploading..."
-                : isGenerating
-                  ? "Cloning in Progress (30-60s)..."
-                  : "Clone Voice"}
+              {isPending ? "Converting & Uploading..." : "Clone Voice"}
             </span>
           </div>
         </button>
