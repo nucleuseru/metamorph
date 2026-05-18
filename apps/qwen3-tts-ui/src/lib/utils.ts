@@ -3,13 +3,7 @@ import { fetchFile, toBlobURL } from "@ffmpeg/util";
 
 let ffmpeg: FFmpeg | null = null;
 
-export type AudioFormat = "mp3" | "ogg";
-
-export async function convertAudio(
-  audioBlob: Blob,
-  format: AudioFormat,
-  onProgress?: (progress: number) => void,
-): Promise<Blob> {
+async function getFFmpeg() {
   ffmpeg ??= new FFmpeg();
 
   if (!ffmpeg.loaded) {
@@ -23,6 +17,19 @@ export async function convertAudio(
     });
   }
 
+  return ffmpeg;
+}
+
+export type AudioFormat = "mp3" | "ogg";
+
+export async function convertAudio(
+  audioBlob: Blob,
+  format: AudioFormat,
+  onProgress?: (progress: number) => void,
+): Promise<Blob> {
+  const ffmpeg = await getFFmpeg();
+
+  ffmpeg.off("progress", () => void 0);
   ffmpeg.on("progress", ({ progress }) => {
     if (onProgress) {
       onProgress(Math.round(progress * 100));
@@ -50,55 +57,16 @@ export async function convertAudio(
 }
 
 export async function convertToWav(file: File): Promise<Blob> {
-  const arrayBuffer = await file.arrayBuffer();
-  const audioContext = new AudioContext();
-  const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+  const ffmpeg = await getFFmpeg();
 
-  const numberOfChannels = audioBuffer.numberOfChannels;
-  const sampleRate = audioBuffer.sampleRate;
-  const length = audioBuffer.length * numberOfChannels * 2;
-  const buffer = new ArrayBuffer(44 + length);
-  const view = new DataView(buffer);
+  const inputName = file.name;
+  const outputName = "output.wav";
 
-  // WAV header
-  writeString(view, 0, "RIFF");
-  view.setUint32(4, 36 + length, true);
-  writeString(view, 8, "WAVE");
-  writeString(view, 12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, numberOfChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * numberOfChannels * 2, true);
-  view.setUint16(32, numberOfChannels * 2, true);
-  view.setUint16(34, 16, true);
-  writeString(view, 36, "data");
-  view.setUint32(40, length, true);
+  await ffmpeg.writeFile(inputName, await fetchFile(file));
+  await ffmpeg.exec(["-i", inputName, "-ar", "44100", "-ac", "1", outputName]);
 
-  // PCM data
-  let offset = 44;
-  for (let i = 0; i < audioBuffer.length; i++) {
-    for (let channel = 0; channel < numberOfChannels; channel++) {
-      const sample = Math.max(
-        -1,
-        Math.min(1, audioBuffer.getChannelData(channel)[i] ?? 1),
-      );
-      view.setInt16(
-        offset,
-        sample < 0 ? sample * 0x8000 : sample * 0x7fff,
-        true,
-      );
-      offset += 2;
-    }
-  }
-
-  return new Blob([view], { type: "audio/wav" });
-}
-
-function writeString(view: DataView, offset: number, string: string) {
-  for (let i = 0; i < string.length; i++) {
-    view.setUint8(offset + i, string.charCodeAt(i));
-  }
+  const data = (await ffmpeg.readFile(outputName)) as Uint8Array;
+  return new Blob([data.buffer as BlobPart], { type: "audio/wav" });
 }
 
 export async function fetchWithProgress(
