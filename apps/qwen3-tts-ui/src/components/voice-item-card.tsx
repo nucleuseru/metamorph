@@ -1,4 +1,8 @@
-import { fetchWithProgress, triggerFileDownload } from "@/lib/utils";
+import {
+  convertToMp3,
+  fetchWithProgress,
+  triggerFileDownload,
+} from "@/lib/utils";
 import { useState } from "react";
 import { DownloadIcon, PlayWaveIcon, SpinnerIcon } from "./icons";
 
@@ -9,6 +13,7 @@ export interface VoiceItemCardProps {
 
 export function VoiceItemCard({ name, src }: VoiceItemCardProps) {
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [isConverting, setIsConverting] = useState(false);
 
   const handleDownload = async () => {
     if (!src) return;
@@ -16,12 +21,18 @@ export function VoiceItemCard({ name, src }: VoiceItemCardProps) {
     setDownloadProgress(0);
     try {
       const blob = await fetchWithProgress(src, setDownloadProgress);
-      triggerFileDownload(blob, `${name}.wav`);
+
+      setIsConverting(true);
+      setDownloadProgress(0);
+      const mp3Blob = await convertToMp3(blob, setDownloadProgress);
+
+      triggerFileDownload(mp3Blob, `${name}.mp3`);
     } catch (error) {
-      console.error("Download failed:", error);
+      console.error("Download or conversion failed:", error);
       alert("Download failed. Please try again.");
     } finally {
       setDownloadProgress(null);
+      setIsConverting(false);
     }
   };
 
@@ -47,13 +58,16 @@ export function VoiceItemCard({ name, src }: VoiceItemCardProps) {
           <div className="flex shrink-0 items-center gap-2">
             <button
               onClick={() => void handleDownload()}
-              disabled={downloadProgress !== null}
+              disabled={downloadProgress !== null || isConverting}
               className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-bold text-white/80 shadow-sm backdrop-blur-md transition-all duration-200 hover:border-white hover:bg-white hover:text-black hover:shadow-[0_0_20px_rgba(255,255,255,0.2)] disabled:opacity-50"
             >
-              {downloadProgress !== null ? (
+              {downloadProgress !== null || isConverting ? (
                 <>
                   <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
-                  <span>{downloadProgress}%</span>
+                  <span>
+                    {isConverting ? "Converting" : "Downloading"}{" "}
+                    {downloadProgress}%
+                  </span>
                 </>
               ) : (
                 <>
@@ -69,7 +83,7 @@ export function VoiceItemCard({ name, src }: VoiceItemCardProps) {
       {downloadProgress !== null && (
         <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
           <div
-            className="h-full bg-emerald-400 shadow-[0_0_8px_#34d399] transition-all duration-300"
+            className={`h-full transition-all duration-300 ${isConverting ? "bg-blue-400 shadow-[0_0_8px_#60a5fa]" : "bg-emerald-400 shadow-[0_0_8px_#34d399]"}`}
             style={{ width: `${downloadProgress.toFixed(1)}%` }}
           />
         </div>

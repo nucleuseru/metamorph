@@ -1,3 +1,41 @@
+import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { fetchFile, toBlobURL } from "@ffmpeg/util";
+
+let ffmpeg: FFmpeg | null = null;
+
+export async function convertToMp3(
+  audioBlob: Blob,
+  onProgress?: (progress: number) => void,
+): Promise<Blob> {
+  ffmpeg ??= new FFmpeg();
+
+  if (!ffmpeg.loaded) {
+    const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd";
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(
+        `${baseURL}/ffmpeg-core.wasm`,
+        "application/wasm",
+      ),
+    });
+  }
+
+  ffmpeg.on("progress", ({ progress }) => {
+    if (onProgress) {
+      onProgress(Math.round(progress * 100));
+    }
+  });
+
+  const inputName = "input.wav";
+  const outputName = "output.mp3";
+
+  await ffmpeg.writeFile(inputName, await fetchFile(audioBlob));
+  await ffmpeg.exec(["-i", inputName, "-b:a", "192k", outputName]);
+
+  const data = (await ffmpeg.readFile(outputName)) as Uint8Array;
+  return new Blob([data.buffer as BlobPart], { type: "audio/mp3" });
+}
+
 export async function convertToWav(file: File): Promise<Blob> {
   const arrayBuffer = await file.arrayBuffer();
   const audioContext = new AudioContext();
