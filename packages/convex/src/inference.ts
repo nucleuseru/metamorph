@@ -46,7 +46,7 @@ export const cloneVoice = action({
           task: "generate",
           text: args.text,
           ref_text: args.ref_text,
-          convex_url: process.env.CONVEX_URL!,
+          convex_url: process.env.CONVEX_CLOUD_URL!,
           upload_url_fn: "file:generateUploadUrl",
         },
         webhook: `${process.env.CONVEX_SITE_URL!}/webhook/audio/tts`,
