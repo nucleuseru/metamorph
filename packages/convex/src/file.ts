@@ -43,7 +43,7 @@ export const updateFile = internalMutation({
   handler: (ctx, args) => {
     return ctx.db.patch("file", args.id, {
       status: args.status,
-      sessionId: args.storageId,
+      storageId: args.storageId,
     });
   },
 });
@@ -58,13 +58,25 @@ export const getFileByJobId = internalQuery({
   },
 });
 
-export const getFilesCount = query({
+export const getFiles = query({
   args: { sessionId: v.string() },
   handler: async (ctx, args) => {
     const files = await ctx.db
       .query("file")
-      .withIndex("by_sessionId", (q) => q.eq("sessionId", args.sessionId))
+      .withIndex("by_sessionId", (q) =>
+        q.eq("sessionId", args.sessionId).eq("status", "completed"),
+      )
+      .order("desc")
       .take(100);
-    return files.length;
+
+    return await Promise.all(
+      files.map(async (file) => {
+        const fileUrl = file.storageId
+          ? await ctx.storage.getUrl(file.storageId)
+          : null;
+
+        return { ...file, src: fileUrl };
+      }),
+    );
   },
 });

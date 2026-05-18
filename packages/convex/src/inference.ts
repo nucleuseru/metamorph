@@ -12,17 +12,18 @@ export interface RunPodData<T = undefined> {
 
 export const cloneVoice = action({
   args: {
+    name: v.string(),
     text: v.string(),
     ref_text: v.string(),
     sessionId: v.string(),
     ref_audio_storage_id: v.id("_storage"),
   },
   handler: async (ctx, args) => {
-    const files = await ctx.runQuery(api.file.getFilesCount, {
+    const files = await ctx.runQuery(api.file.getFiles, {
       sessionId: args.sessionId,
     });
 
-    if (files >= 100) {
+    if (files.length >= 100) {
       throw new ConvexError(
         "Cannot generate more than 100 audios per session.",
       );
@@ -34,11 +35,11 @@ export const cloneVoice = action({
       throw new ConvexError("Reference audio not found.");
     }
 
-    const response = await fetch(process.env.RUNPOD_TTS_API_URL!, {
+    const response = await fetch(process.env.RUNPOD_TTS_API_URL ?? "", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.RUNPOD_API_KEY!}`,
+        Authorization: `Bearer ${process.env.RUNPOD_API_KEY ?? ""}`,
       },
       body: JSON.stringify({
         input: {
@@ -46,10 +47,10 @@ export const cloneVoice = action({
           task: "generate",
           text: args.text,
           ref_text: args.ref_text,
-          convex_url: process.env.CONVEX_CLOUD_URL!,
+          convex_url: process.env.CONVEX_CLOUD_URL ?? "",
           upload_url_fn: "file:generateUploadUrl",
         },
-        webhook: `${process.env.CONVEX_SITE_URL!}/webhook/audio/tts`,
+        webhook: `${process.env.CONVEX_SITE_URL ?? ""}/webhook/audio/tts`,
       }),
     });
 
@@ -63,8 +64,9 @@ export const cloneVoice = action({
 
     const fileId: Id<"file"> = await ctx.runMutation(internal.file.createFile, {
       jobId: data.id,
-      sessionId: args.sessionId,
+      name: args.name,
       status: "generating",
+      sessionId: args.sessionId,
     });
 
     return fileId;

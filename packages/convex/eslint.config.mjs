@@ -1,3 +1,3 @@
 import eslintConfig from "@repo/eslint-config/convex";
 
-eslintConfig;
+export default eslintConfig;
