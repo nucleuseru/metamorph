@@ -1,4 +1,6 @@
-import { DownloadIcon, PlayWaveIcon } from "./icons";
+import { fetchWithProgress, triggerFileDownload } from "@/lib/utils";
+import { useState } from "react";
+import { DownloadIcon, PlayWaveIcon, SpinnerIcon } from "./icons";
 
 export interface VoiceItemCardProps {
   name: string;
@@ -6,6 +8,23 @@ export interface VoiceItemCardProps {
 }
 
 export function VoiceItemCard({ name, src }: VoiceItemCardProps) {
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+
+  const handleDownload = async () => {
+    if (!src) return;
+
+    setDownloadProgress(0);
+    try {
+      const blob = await fetchWithProgress(src, setDownloadProgress);
+      triggerFileDownload(blob, `${name}.wav`);
+    } catch (error) {
+      console.error("Download failed:", error);
+      alert("Download failed. Please try again.");
+    } finally {
+      setDownloadProgress(null);
+    }
+  };
+
   return (
     <div className="group relative flex flex-col justify-between gap-4 rounded-3xl border border-white/10 bg-[#0f0f11]/80 p-5 shadow-xl backdrop-blur-xl transition-all duration-300 hover:border-white/20 hover:bg-[#151518]/80 hover:shadow-2xl sm:p-6">
       <div className="flex items-start justify-between gap-4">
@@ -25,18 +44,36 @@ export function VoiceItemCard({ name, src }: VoiceItemCardProps) {
         </div>
 
         {src && (
-          <a
-            href={src}
-            download={`${name}.wav`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex shrink-0 items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-bold text-white/80 shadow-sm backdrop-blur-md transition-all duration-200 hover:border-white hover:bg-white hover:text-black hover:shadow-[0_0_20px_rgba(255,255,255,0.2)]"
-          >
-            <DownloadIcon className="h-3.5 w-3.5" />
-            <span>Download</span>
-          </a>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              onClick={() => void handleDownload()}
+              disabled={downloadProgress !== null}
+              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-bold text-white/80 shadow-sm backdrop-blur-md transition-all duration-200 hover:border-white hover:bg-white hover:text-black hover:shadow-[0_0_20px_rgba(255,255,255,0.2)] disabled:opacity-50"
+            >
+              {downloadProgress !== null ? (
+                <>
+                  <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
+                  <span>{downloadProgress}%</span>
+                </>
+              ) : (
+                <>
+                  <DownloadIcon className="h-3.5 w-3.5" />
+                  <span>Download</span>
+                </>
+              )}
+            </button>
+          </div>
         )}
       </div>
+
+      {downloadProgress !== null && (
+        <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
+          <div
+            className="h-full bg-emerald-400 shadow-[0_0_8px_#34d399] transition-all duration-300"
+            style={{ width: `${downloadProgress.toFixed(1)}%` }}
+          />
+        </div>
+      )}
 
       {src && (
         <div className="w-full pt-1">

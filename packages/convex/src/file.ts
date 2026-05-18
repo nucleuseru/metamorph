@@ -63,8 +63,12 @@ export const getFiles = query({
   handler: async (ctx, args) => {
     const files = await ctx.db
       .query("file")
-      .withIndex("by_sessionId", (q) =>
-        q.eq("sessionId", args.sessionId).eq("status", "completed"),
+      .withIndex("by_sessionId", (q) => q.eq("sessionId", args.sessionId))
+      .filter((q) =>
+        q.or(
+          q.eq(q.field("status"), "completed"),
+          q.eq(q.field("status"), "generating"),
+        ),
       )
       .order("desc")
       .take(100);

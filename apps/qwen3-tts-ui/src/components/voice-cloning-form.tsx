@@ -82,11 +82,7 @@ export function VoiceCloningForm({ sessionId }: { sessionId: string }) {
           }}
         />
 
-        <VoiceLibraryList
-          files={files ?? []}
-          isGenerating={isGenerating}
-          generatingVoiceName={file?.name ?? "New Voice Clone"}
-        />
+        <VoiceLibraryList files={files ?? []} />
       </div>
     </div>
   );

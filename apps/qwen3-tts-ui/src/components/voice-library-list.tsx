@@ -3,16 +3,15 @@ import { FolderIcon, SoundWaveIcon } from "./icons";
 import { VoiceItemCard } from "./voice-item-card";
 
 export interface VoiceLibraryListProps {
-  files: { _id: string | number; name: string; src?: string | null }[];
-  isGenerating?: boolean;
-  generatingVoiceName?: string;
+  files: {
+    _id: string | number;
+    name: string;
+    status: string;
+    src?: string | null;
+  }[];
 }
 
-export function VoiceLibraryList({
-  files,
-  isGenerating = false,
-  generatingVoiceName = "New Voice Clone",
-}: VoiceLibraryListProps) {
+export function VoiceLibraryList({ files }: VoiceLibraryListProps) {
   return (
     <section className="space-y-4 lg:col-span-5">
       <div className="flex items-center justify-between px-1">
@@ -25,12 +24,8 @@ export function VoiceLibraryList({
         </span>
       </div>
 
-      {isGenerating && (
-        <GenerationProgressCard voiceName={generatingVoiceName} />
-      )}
-
       <div className="space-y-4">
-        {files.length === 0 && !isGenerating && (
+        {files.length === 0 && (
           <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-white/10 bg-[#0f0f11]/40 p-12 text-center shadow-inner backdrop-blur-sm">
             <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-white/40 shadow-sm">
               <SoundWaveIcon className="h-7 w-7" />
@@ -44,13 +39,20 @@ export function VoiceLibraryList({
           </div>
         )}
 
-        {files.map((item) => (
-          <VoiceItemCard
-            key={String(item._id)}
-            name={item.name}
-            src={item.src}
-          />
-        ))}
+        {files.map((item) =>
+          item.status === "generating" ? (
+            <GenerationProgressCard
+              key={String(item._id)}
+              voiceName={item.name}
+            />
+          ) : (
+            <VoiceItemCard
+              key={String(item._id)}
+              name={item.name}
+              src={item.src}
+            />
+          ),
+        )}
       </div>
     </section>
   );

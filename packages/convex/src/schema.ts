@@ -11,7 +11,7 @@ export const File = {
 
 export const table = {
   file: defineTable(File)
-    .index("by_sessionId", ["sessionId", "status"])
+    .index("by_sessionId", ["sessionId"])
     .index("by_jobId", ["jobId"]),
 };
 

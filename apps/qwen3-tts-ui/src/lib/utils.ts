@@ -49,3 +49,51 @@ function writeString(view: DataView, offset: number, string: string) {
     view.setUint8(offset + i, string.charCodeAt(i));
   }
 }
+
+export async function fetchWithProgress(
+  url: string,
+  onProgress?: (progress: number) => void,
+): Promise<Blob> {
+  let response: Response | null = null;
+  for (let i = 0; i < 3; i++) {
+    try {
+      response = await fetch(url);
+      if (response.ok) break;
+    } catch (e) {
+      if (i === 2) throw e;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+
+  if (!response?.ok) throw new Error("Failed to fetch");
+
+  const contentLength = Number(response.headers.get("Content-Length") ?? 0);
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("ReadableStream not supported");
+
+  const chunks: BlobPart[] = [];
+  let receivedLength = 0;
+
+  while (true as boolean) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    receivedLength += value.length;
+    if (contentLength && onProgress) {
+      onProgress(Math.round((receivedLength / contentLength) * 100));
+    }
+  }
+
+  return new Blob(chunks);
+}
+
+export function triggerFileDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
