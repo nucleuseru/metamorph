@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+aiortc
+av
+python-dotenv
+pydantic-settings
+python-multipart
+numpy
+git+https://github.com/huggingface/diffusers.git
+transformers
+accelerate
+bitsandbytes
+peft
+pillow
