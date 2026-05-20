@@ -22,29 +22,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.post("/setup", response_model=SetupResponse)
 async def setup(
     prompt: str = Form(...),
     images: List[UploadFile] = File(...),
-    api_key: str = Depends(get_api_key)
+    api_key: str = Depends(get_api_key),
 ):
     session_id = str(uuid.uuid4())
     image_contents = []
     for image in images:
         content = await image.read()
         image_contents.append(content)
-        
-    sessions[session_id] = {
-        "prompt": prompt,
-        "images": image_contents
-    }
+
+    sessions[session_id] = {"prompt": prompt, "images": image_contents}
     return SetupResponse(session_id=session_id)
+
 
 @app.post("/offer")
 async def offer(params: Offer, api_key: str = Depends(get_api_key)):
     if params.session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     session_data = sessions[params.session_id]
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     pc = RTCPeerConnection()
@@ -65,10 +64,8 @@ async def offer(params: Offer, api_key: str = Depends(get_api_key)):
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
-    return {
-        "sdp": pc.localDescription.sdp,
-        "type": pc.localDescription.type
-    }
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -76,6 +73,8 @@ async def on_shutdown():
     await asyncio.gather(*coros)
     sessions.clear()
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host=settings.host, port=settings.port)

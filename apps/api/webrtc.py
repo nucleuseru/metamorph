@@ -7,6 +7,7 @@ from config import settings
 from ml_pipeline import run_inference
 from interpolation import interpolate_frames
 
+
 class VideoTransformTrack(MediaStreamTrack):
     kind = "video"
 
@@ -24,7 +25,7 @@ class VideoTransformTrack(MediaStreamTrack):
         if self._empty_frame is None:
             black_img = np.zeros((height, width, 3), dtype=np.uint8)
             self._empty_frame = VideoFrame.from_ndarray(black_img, format="bgr24")
-        
+
         frame = self._empty_frame
         frame.pts = self._last_pts + 1
         frame.time_base = self._last_time_base or "1/30"
@@ -35,30 +36,34 @@ class VideoTransformTrack(MediaStreamTrack):
         frame_counter = 0
         last_inference: Optional[VideoFrame] = None
         n_frames = settings.inference_interval
-        
+
         try:
             while True:
                 frame = await self.track.recv()
                 self._last_time_base = frame.time_base
-                
+
                 if frame_counter % n_frames == 0:
-                    curr_inference = await asyncio.to_thread(run_inference, frame, self.session_data)
-                    
+                    curr_inference = await asyncio.to_thread(
+                        run_inference, frame, self.session_data
+                    )
+
                     if last_inference is not None:
-                        interpolated_list = interpolate_frames(last_inference, curr_inference, count=n_frames)
+                        interpolated_list = interpolate_frames(
+                            last_inference, curr_inference, count=n_frames
+                        )
                         start_pts = frame.pts - n_frames
-                        
+
                         for i, interp in enumerate(interpolated_list):
                             interp.pts = start_pts + i
                             interp.time_base = frame.time_base
-                            
+
                             try:
                                 self.queue.put_nowait(interp)
                             except asyncio.QueueFull:
-                                break 
-                                
+                                break
+
                     last_inference = curr_inference
-                
+
                 frame_counter += 1
         except asyncio.CancelledError:
             pass
