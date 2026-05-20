@@ -517,7 +517,8 @@
           updateStatus("connecting", "Negotiating WebRTC offer...");
 
           pc = new RTCPeerConnection({
-            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+            iceServers: ICE_SERVERS_CONFIG,
+            iceTransportPolicy: "ICE_TRANSPORT_POLICY",
           });
 
           // Add camera track to peer connection

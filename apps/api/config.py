@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     use_tf32: bool = True
     use_rife_fp16: bool = True
 
+    # WebRTC ICE configuration
+    ice_servers_json: str = '[{"urls": "stun:stun.l.google.com:19302"}]'
+    ice_transport_policy: str = "all"
+
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )

@@ -1,11 +1,17 @@
 import asyncio
 import uuid
 import os
+import json
 from typing import List
 from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, Form
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import (
+    RTCPeerConnection,
+    RTCSessionDescription,
+    RTCConfiguration,
+    RTCIceServer,
+)
 
 from security import get_api_key
 from models import SetupResponse, Offer
@@ -41,6 +47,22 @@ async def setup(
     return SetupResponse(session_id=session_id)
 
 
+def get_ice_servers() -> List[RTCIceServer]:
+    try:
+        servers = json.loads(settings.ice_servers_json)
+        return [
+            RTCIceServer(
+                urls=s.get("urls"),
+                username=s.get("username"),
+                credential=s.get("credential"),
+            )
+            for s in servers
+        ]
+    except Exception as e:
+        print(f"Error parsing ice_servers_json: {e}")
+        return [RTCIceServer(urls="stun:stun.l.google.com:19302")]
+
+
 @app.post("/offer")
 async def offer(params: Offer, api_key: str = Depends(get_api_key)):
     if params.session_id not in sessions:
@@ -48,7 +70,9 @@ async def offer(params: Offer, api_key: str = Depends(get_api_key)):
 
     session_data = sessions[params.session_id]
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
-    pc = RTCPeerConnection()
+
+    config = RTCConfiguration(iceServers=get_ice_servers())
+    pc = RTCPeerConnection(configuration=config)
     pcs.add(pc)
 
     @pc.on("connectionstatechange")
@@ -76,6 +100,10 @@ async def index():
     with open(html_path, "r", encoding="utf-8") as f:
         html_content = f.read()
     html_content = html_content.replace('value=""', f'value="{settings.api_key}"')
+    html_content = html_content.replace("ICE_SERVERS_CONFIG", settings.ice_servers_json)
+    html_content = html_content.replace(
+        "ICE_TRANSPORT_POLICY", settings.ice_transport_policy
+    )
     return HTMLResponse(content=html_content)
 
 
