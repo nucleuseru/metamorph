@@ -6,9 +6,9 @@ python-dotenv
 pydantic-settings
 python-multipart
 numpy
-torch
-diffusers
+git+https://github.com/huggingface/diffusers.git
 transformers
 accelerate
+bitsandbytes
 peft
 pillow

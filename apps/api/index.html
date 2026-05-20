@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Metamorph - Real-time Character Swap Test Bench</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-color: #0b0f19;
+        --card-bg: rgba(17, 24, 39, 0.75);
+        --card-border: rgba(255, 255, 255, 0.08);
+        --text-primary: #f3f4f6;
+        --text-secondary: #9ca3af;
+        --accent: #6366f1;
+        --accent-hover: #4f46e5;
+        --success: #10b981;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: "Inter", sans-serif;
+        background-color: var(--bg-color);
+        color: var(--text-primary);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        line-height: 1.5;
+        background-image:
+          radial-gradient(
+            circle at 10% 20%,
+            rgba(99, 102, 241, 0.15) 0%,
+            transparent 40%
+          ),
+          radial-gradient(
+            circle at 90% 80%,
+            rgba(16, 185, 129, 0.1) 0%,
+            transparent 40%
+          );
+      }
+
+      header {
+        padding: 1.5rem 2rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid var(--card-border);
+        backdrop-filter: blur(10px);
+      }
+
+      .logo {
+        font-size: 1.5rem;
+        font-weight: 700;
+        letter-spacing: -0.05em;
+        background: linear-gradient(135deg, #6366f1, #10b981);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .status-badge {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        border-radius: 9999px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--card-border);
+        font-size: 0.875rem;
+        font-weight: 500;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: var(--text-secondary);
+      }
+
+      .status-dot.disconnected {
+        background-color: var(--text-secondary);
+      }
+      .status-dot.initialized {
+        background-color: var(--warning);
+      }
+      .status-dot.connecting {
+        background-color: var(--accent);
+      }
+      .status-dot.live {
+        background-color: var(--success);
+        box-shadow: 0 0 8px var(--success);
+        animation: pulse 1.5s infinite;
+      }
+      .status-dot.error {
+        background-color: var(--danger);
+      }
+
+      @keyframes pulse {
+        0% {
+          transform: scale(0.9);
+          opacity: 0.6;
+        }
+        50% {
+          transform: scale(1.1);
+          opacity: 1;
+        }
+        100% {
+          transform: scale(0.9);
+          opacity: 0.6;
+        }
+      }
+
+      main {
+        flex: 1;
+        padding: 2rem;
+        max-width: 1400px;
+        width: 100%;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: 400px 1fr;
+        gap: 2rem;
+      }
+
+      .card {
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 16px;
+        padding: 1.5rem;
+        backdrop-filter: blur(12px);
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+      }
+
+      .card-title {
+        font-size: 1.125rem;
+        font-weight: 600;
+        border-bottom: 1px solid var(--card-border);
+        padding-bottom: 0.75rem;
+        margin-bottom: 0.5rem;
+      }
+
+      .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      label {
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: var(--text-secondary);
+      }
+
+      input[type="text"],
+      textarea {
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid var(--card-border);
+        border-radius: 8px;
+        padding: 0.75rem;
+        color: var(--text-primary);
+        font-family: inherit;
+        font-size: 0.95rem;
+        transition: all 0.2s;
+      }
+
+      input[type="text"]:focus,
+      textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+      }
+
+      .file-dropzone {
+        border: 2px dashed var(--card-border);
+        border-radius: 8px;
+        padding: 1.5rem;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+        background: rgba(0, 0, 0, 0.1);
+      }
+
+      .file-dropzone:hover {
+        border-color: var(--accent);
+        background: rgba(99, 102, 241, 0.05);
+      }
+
+      .file-dropzone input {
+        display: none;
+      }
+
+      .gallery {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+      }
+
+      .gallery-item {
+        aspect-ratio: 1;
+        border-radius: 6px;
+        overflow: hidden;
+        border: 1px solid var(--card-border);
+        position: relative;
+      }
+
+      .gallery-item img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .btn {
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.75rem 1.5rem;
+        font-size: 0.95rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .btn:hover {
+        background: var(--accent-hover);
+      }
+
+      .btn:disabled {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text-secondary);
+        cursor: not-allowed;
+        border: 1px solid var(--card-border);
+      }
+
+      .btn-danger {
+        background: var(--danger);
+      }
+      .btn-danger:hover {
+        background: #dc2626;
+      }
+
+      .video-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+        height: 100%;
+      }
+
+      .video-box {
+        background: rgba(0, 0, 0, 0.3);
+        border-radius: 12px;
+        border: 1px solid var(--card-border);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+        aspect-ratio: 4/3;
+      }
+
+      .video-box video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        background: black;
+      }
+
+      .video-box.mirrored video {
+        transform: scaleX(-1);
+      }
+
+      .video-label {
+        position: absolute;
+        bottom: 1rem;
+        left: 1rem;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(4px);
+        padding: 0.25rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      footer {
+        padding: 1.5rem;
+        text-align: center;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        border-top: 1px solid var(--card-border);
+      }
+
+      @media (max-width: 960px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+        .video-container {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="logo">METAMORPH Swapper</div>
+      <div class="status-badge">
+        <div id="statusDot" class="status-dot disconnected"></div>
+        <span id="statusText">Disconnected</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2 class="card-title">Setup Configuration</h2>
+
+        <div class="form-group">
+          <label for="apiKey">API Key (X-API-Key)</label>
+          <input
+            type="text"
+            id="apiKey"
+            placeholder="Enter X-API-Key header value..."
+            value=""
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="prompt">Swap Prompt</label>
+          <textarea
+            id="prompt"
+            rows="3"
+            placeholder="Describe the character to swap, e.g., Iron Man, Cyberpunk warrior..."
+          ></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>Reference Images (Multiple allowed)</label>
+          <div
+            class="file-dropzone"
+            onclick="document.getElementById('imageFiles').click()"
+          >
+            <span>Click or drag character reference images</span>
+            <input type="file" id="imageFiles" multiple accept="image/*" />
+          </div>
+          <div id="gallery" class="gallery"></div>
+        </div>
+
+        <button id="btnSetup" class="btn">Initialize Swap Session</button>
+        <button id="btnStart" class="btn" disabled>
+          Start Real-time Stream
+        </button>
+        <button id="btnStop" class="btn btn-danger" disabled>
+          Stop Connection
+        </button>
+      </section>
+
+      <section class="card" style="justify-content: stretch">
+        <h2 class="card-title">Live Feeds</h2>
+        <div class="video-container">
+          <div class="video-box mirrored">
+            <video id="localVideo" autoplay playsinline muted></video>
+            <div class="video-label">Local Camera Feed</div>
+          </div>
+          <div class="video-box">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <div class="video-label">Metamorph Swap Output</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      Metamorph Real-Time Pipeline Test Panel. Powered by FastAPI, WebRTC &
+      Diffusers.
+    </footer>
+
+    <script>
+      let sessionId = null;
+      let localStream = null;
+      let pc = null;
+
+      const apiKeyInput = document.getElementById("apiKey");
+      const promptInput = document.getElementById("prompt");
+      const imageFilesInput = document.getElementById("imageFiles");
+      const gallery = document.getElementById("gallery");
+
+      const btnSetup = document.getElementById("btnSetup");
+      const btnStart = document.getElementById("btnStart");
+      const btnStop = document.getElementById("btnStop");
+
+      const localVideo = document.getElementById("localVideo");
+      const remoteVideo = document.getElementById("remoteVideo");
+
+      const statusDot = document.getElementById("statusDot");
+      const statusText = document.getElementById("statusText");
+
+      // Prepopulate with testing API Key from URL parameters if present
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.has("key")) {
+        apiKeyInput.value = urlParams.get("key");
+      }
+
+      function updateStatus(state, label) {
+        statusDot.className = "status-dot " + state;
+        statusText.textContent = label;
+      }
+
+      // Handle file dropzone previews
+      imageFilesInput.addEventListener("change", () => {
+        gallery.innerHTML = "";
+        Array.from(imageFilesInput.files).forEach((file) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const div = document.createElement("div");
+            div.className = "gallery-item";
+            const img = document.createElement("img");
+            img.src = e.target.result;
+            div.appendChild(img);
+            gallery.appendChild(div);
+          };
+          reader.readAsDataURL(file);
+        });
+      });
+
+      // Step 1: Initialize the Session on the API
+      btnSetup.addEventListener("click", async () => {
+        const apiKey = apiKeyInput.value.trim();
+        const prompt = promptInput.value.trim();
+        const files = imageFilesInput.files;
+
+        if (!apiKey) {
+          alert("Please enter your X-API-Key.");
+          return;
+        }
+        if (!prompt) {
+          alert("Please enter a swap prompt.");
+          return;
+        }
+        if (files.length === 0) {
+          alert("Please upload at least one character reference image.");
+          return;
+        }
+
+        btnSetup.disabled = true;
+        btnSetup.textContent = "Initializing...";
+        updateStatus("connecting", "Creating session...");
+
+        try {
+          const formData = new FormData();
+          formData.append("prompt", prompt);
+          for (let i = 0; i < files.length; i++) {
+            formData.append("images", files[i]);
+          }
+
+          const response = await fetch("/setup", {
+            method: "POST",
+            headers: {
+              "X-API-Key": apiKey,
+            },
+            body: formData,
+          });
+
+          if (!response.ok) {
+            throw new Error(
+              (await response.text()) || "Failed to initialize session",
+            );
+          }
+
+          const data = await response.json();
+          sessionId = data.session_id;
+
+          updateStatus("initialized", "Session ready");
+          btnStart.disabled = false;
+          btnSetup.textContent = "Session Initialized";
+        } catch (err) {
+          console.error(err);
+          alert("Setup failed: " + err.message);
+          updateStatus("error", "Setup failed");
+          btnSetup.disabled = false;
+          btnSetup.textContent = "Initialize Swap Session";
+        }
+      });
+
+      // Step 2: Establish the WebRTC Peer Connection
+      btnStart.addEventListener("click", async () => {
+        const apiKey = apiKeyInput.value.trim();
+        if (!sessionId) return;
+
+        btnStart.disabled = true;
+        updateStatus("connecting", "Requesting camera...");
+
+        try {
+          // Request camera feed
+          localStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              frameRate: { ideal: 24 },
+            },
+            audio: false,
+          });
+          localVideo.srcObject = localStream;
+
+          updateStatus("connecting", "Negotiating WebRTC offer...");
+
+          pc = new RTCPeerConnection({
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+          });
+
+          // Add camera track to peer connection
+          localStream.getTracks().forEach((track) => {
+            pc.addTrack(track, localStream);
+          });
+
+          // Handle incoming swapped track from server
+          pc.addEventListener("track", (evt) => {
+            if (evt.track.kind === "video") {
+              remoteVideo.srcObject = evt.streams[0];
+              updateStatus("live", "Live Swapping Connected");
+            }
+          });
+
+          pc.addEventListener("iceconnectionstatechange", () => {
+            if (pc.iceConnectionState === "failed") {
+              updateStatus("error", "ICE Negotiation Failed");
+              stopAll();
+            }
+          });
+
+          // Create offer
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          // Wait for ICE gathering to complete before posting offer
+          await new Promise((resolve) => {
+            if (pc.iceGatheringState === "complete") {
+              resolve();
+            } else {
+              function checkState() {
+                if (pc.iceGatheringState === "complete") {
+                  pc.removeEventListener("icegatheringstatechange", checkState);
+                  resolve();
+                }
+              }
+              pc.addEventListener("icegatheringstatechange", checkState);
+            }
+          });
+
+          // Post offer to backend API
+          const offerResponse = await fetch("/offer", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-API-Key": apiKey,
+            },
+            body: JSON.stringify({
+              sdp: pc.localDescription.sdp,
+              type: pc.localDescription.type,
+              session_id: sessionId,
+            }),
+          });
+
+          if (!offerResponse.ok) {
+            throw new Error(
+              (await offerResponse.text()) || "Failed to exchange offer",
+            );
+          }
+
+          const answer = await offerResponse.json();
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+
+          btnStop.disabled = false;
+        } catch (err) {
+          console.error(err);
+          alert("Failed to start stream: " + err.message);
+          updateStatus("error", "Connection failed");
+          stopAll();
+        }
+      });
+
+      function stopAll() {
+        btnStop.disabled = true;
+        btnStart.disabled = !sessionId;
+
+        if (pc) {
+          pc.close();
+          pc = null;
+        }
+        if (localStream) {
+          localStream.getTracks().forEach((track) => track.stop());
+          localStream = null;
+        }
+        localVideo.srcObject = null;
+        remoteVideo.srcObject = null;
+
+        if (sessionId) {
+          updateStatus("initialized", "Session ready");
+        } else {
+          updateStatus("disconnected", "Disconnected");
+        }
+      }
+
+      btnStop.addEventListener("click", () => {
+        stopAll();
+      });
+    </script>
+  </body>
+</html>

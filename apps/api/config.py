@@ -4,7 +4,7 @@ from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("config")
 
 
@@ -20,13 +20,13 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # ML Models Configuration
-    model_id: str = "black-forest-labs/FLUX.2-klein-9b-kv-fp8"
+    model_id: str = "black-forest-labs/FLUX.2-klein-9b-kv"
     vae_model_id: str = "black-forest-labs/FLUX.2-small-decoder"
     lora_model_id: str = "dx8152/Flux2-Klein-9B-Consistency"
 
     # Hyperparameters
     inference_interval: int = 16
-    inference_resolution: int = 512
+    inference_resolution: int = 480
     rife_scale: float = 1.0
     lora_scale: float = 0.8
 

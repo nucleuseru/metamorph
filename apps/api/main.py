@@ -1,7 +1,9 @@
 import asyncio
 import uuid
+import os
 from typing import List
 from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, Form
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from aiortc import RTCPeerConnection, RTCSessionDescription
 
@@ -65,6 +67,16 @@ async def offer(params: Offer, api_key: str = Depends(get_api_key)):
     await pc.setLocalDescription(answer)
 
     return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    api_dir = os.path.dirname(os.path.abspath(__file__))
+    html_path = os.path.join(api_dir, "index.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+    html_content = html_content.replace('value=""', f'value="{settings.api_key}"')
+    return HTMLResponse(content=html_content)
 
 
 @app.on_event("shutdown")
