@@ -9,13 +9,14 @@ from security import get_api_key
 from models import SetupResponse, Offer
 from sessions import sessions, pcs
 from webrtc import VideoTransformTrack
+from config import settings
 
 app = FastAPI(title="WebRTC ML Processing API")
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -77,4 +78,4 @@ async def on_shutdown():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=settings.host, port=settings.port)
