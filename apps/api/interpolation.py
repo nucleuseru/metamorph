@@ -1,10 +1,10 @@
 import os
 import sys
-from typing import List
 import torch
-import torch.nn.functional as F
+from typing import List
 from av import VideoFrame
 from config import settings
+import torch.nn.functional as F
 
 rife_model = None
 

@@ -1,11 +1,17 @@
-import asyncio
-import uuid
 import os
-import json
+import uuid
+import asyncio
+import logging
+import requests
 from typing import List
-from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, Form
+from config import settings
+from security import get_api_key
+from sessions import sessions, pcs
+from webrtc import VideoTransformTrack
+from models import SetupResponse, Offer
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, Form
 from aiortc import (
     RTCPeerConnection,
     RTCSessionDescription,
@@ -13,15 +19,10 @@ from aiortc import (
     RTCIceServer,
 )
 
-from security import get_api_key
-from models import SetupResponse, Offer
-from sessions import sessions, pcs
-from webrtc import VideoTransformTrack
-from config import settings
 
+logger = logging.getLogger(__name__)
 app = FastAPI(title="WebRTC ML Processing API")
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -47,9 +48,24 @@ async def setup(
     return SetupResponse(session_id=session_id)
 
 
-def get_ice_servers() -> List[RTCIceServer]:
+async def fetch_ice_servers() -> List[RTCIceServer]:
+    if not settings.metered_api_key:
+        logger.warning(
+            "METERED_API_KEY is not set. Falling back to public STUN server only."
+        )
+        return [RTCIceServer(urls="stun:stun.l.google.com:19302")]
+
+    metered_url = "https://metamorph.metered.live/api/v1/turn/credentials"
     try:
-        servers = json.loads(settings.ice_servers_json)
+        response = await asyncio.to_thread(
+            requests.get,
+            metered_url,
+            params={"apiKey": settings.metered_api_key},
+            timeout=10,
+        )
+        response.raise_for_status()
+        servers = response.json()
+
         return [
             RTCIceServer(
                 urls=s.get("urls"),
@@ -59,19 +75,37 @@ def get_ice_servers() -> List[RTCIceServer]:
             for s in servers
         ]
     except Exception as e:
-        print(f"Error parsing ice_servers_json: {e}")
+        logger.error("Failed to fetch Metered TURN credentials: %s", e)
         return [RTCIceServer(urls="stun:stun.l.google.com:19302")]
 
 
+@app.get("/ice-servers")
+async def get_ice_servers(api_key: str = Depends(get_api_key)):
+    ice_servers = await fetch_ice_servers()
+
+    return [
+        {
+            "urls": s.urls,
+            **(  # only include auth fields when present
+                {"username": s.username, "credential": s.credential}
+                if s.username
+                else {}
+            ),
+        }
+        for s in ice_servers
+    ]
+
+
 @app.post("/offer")
-async def offer(params: Offer, api_key: str = Depends(get_api_key)):
+async def offer_handler(params: Offer, _api_key: str = Depends(get_api_key)):
     if params.session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
 
     session_data = sessions[params.session_id]
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
 
-    config = RTCConfiguration(iceServers=get_ice_servers())
+    ice_servers = await fetch_ice_servers()
+    config = RTCConfiguration(iceServers=ice_servers)
     pc = RTCPeerConnection(configuration=config)
     pcs.add(pc)
 
@@ -100,11 +134,23 @@ async def index():
     with open(html_path, "r", encoding="utf-8") as f:
         html_content = f.read()
     html_content = html_content.replace('value=""', f'value="{settings.api_key}"')
-    html_content = html_content.replace("ICE_SERVERS_CONFIG", settings.ice_servers_json)
-    html_content = html_content.replace(
-        "ICE_TRANSPORT_POLICY", settings.ice_transport_policy
-    )
     return HTMLResponse(content=html_content)
+
+
+@app.on_event("startup")
+async def on_startup():
+    import threading
+    from ml_pipeline import get_pipeline
+
+    def load_pipeline():
+        try:
+            logger.info("Initializing ML pipeline pre-loading in background thread...")
+            get_pipeline()
+            logger.info("ML pipeline successfully pre-loaded and ready.")
+        except Exception as e:
+            logger.error(f"Error pre-loading ML pipeline on startup: {e}")
+
+    threading.Thread(target=load_pipeline, daemon=True).start()
 
 
 @app.on_event("shutdown")
