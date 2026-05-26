@@ -1,10 +1,10 @@
 import asyncio
-from typing import Dict, Any, Optional
-from aiortc import MediaStreamTrack
-from av import VideoFrame
 import numpy as np
+from av import VideoFrame
 from config import settings
+from aiortc import MediaStreamTrack
 from ml_pipeline import run_inference
+from typing import Dict, Any, Optional
 from interpolation import interpolate_frames
 
 
@@ -17,20 +17,8 @@ class VideoTransformTrack(MediaStreamTrack):
         self.session_data = session_data
         self.queue = asyncio.Queue(maxsize=30)
         self._processing_task = asyncio.create_task(self._process_frames())
-        self._empty_frame: Optional[VideoFrame] = None
         self._last_pts = 0
         self._last_time_base = None
-
-    def _make_empty_frame(self, width=640, height=480) -> VideoFrame:
-        if self._empty_frame is None:
-            black_img = np.zeros((height, width, 3), dtype=np.uint8)
-            self._empty_frame = VideoFrame.from_ndarray(black_img, format="bgr24")
-
-        frame = self._empty_frame
-        frame.pts = self._last_pts + 1
-        frame.time_base = self._last_time_base or "1/30"
-        self._last_pts = frame.pts
-        return frame
 
     async def _process_frames(self):
         frame_counter = 0
@@ -71,12 +59,9 @@ class VideoTransformTrack(MediaStreamTrack):
             print(f"Processing loop error: {e}")
 
     async def recv(self):
-        try:
-            frame = self.queue.get_nowait()
-            self._last_pts = frame.pts
-            return frame
-        except asyncio.QueueEmpty:
-            return self._make_empty_frame()
+        frame = await self.queue.get()
+        self._last_pts = frame.pts
+        return frame
 
     def stop(self):
         super().stop()

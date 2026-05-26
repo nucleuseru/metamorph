@@ -1,10 +1,14 @@
-from typing import Dict, Any
+import os
 import torch
+import logging
 from PIL import Image
 from io import BytesIO
-from diffusers import Flux2KleinKVPipeline, AutoencoderKL
 from config import settings
+from typing import Dict, Any
+from diffusers import Flux2KleinKVPipeline, AutoencoderKL
 
+
+logger = logging.getLogger(__name__)
 pipe = None
 
 
@@ -18,11 +22,25 @@ def get_pipeline():
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
 
-        vae = AutoencoderKL.from_pretrained(settings.vae_model_id, torch_dtype=dtype)
-        pipe = Flux2KleinKVPipeline.from_pretrained(
-            settings.model_id, vae=vae, torch_dtype=dtype
+        token = settings.hf_token.strip()
+
+        logger.info(f"Downloading/Loading VAE from {settings.vae_model_id}...")
+        vae = AutoencoderKL.from_pretrained(
+            settings.vae_model_id, torch_dtype=dtype, token=token
         )
-        pipe.load_lora_weights(settings.lora_model_id)
+
+        logger.info(
+            f"Downloading/Loading FLUX Pipeline from {settings.model_id} (this may take a few minutes)..."
+        )
+        pipe = Flux2KleinKVPipeline.from_pretrained(
+            settings.model_id,
+            vae=vae,
+            torch_dtype=dtype,
+            token=token,
+        )
+
+        logger.info(f"Loading LoRA weights from {settings.lora_model_id}...")
+        pipe.load_lora_weights(settings.lora_model_id, token=token)
 
         if settings.use_channels_last and torch.cuda.is_available():
             pipe.transformer.to(memory_format=torch.channels_last)
@@ -47,8 +65,8 @@ def run_inference(frame, session_data: Dict[str, Any]):
             prompt = session_data.get("prompt", "")
             enhanced_prompt = (
                 f"{prompt}, keeping the exact pose, body posture, facial expression, eye gaze, background, "
-                "and lighting from the camera feed, swapping the identity of the person with the character in the reference images. "
-                "High quality, realistic character swap, seamless blend."
+                + "and lighting from figure 1, swapping the identity of the person with the character in the reference images. "
+                + "High quality, realistic character swap, seamless blend."
             )
 
             with torch.no_grad():
@@ -94,9 +112,9 @@ def run_inference(frame, session_data: Dict[str, Any]):
 
         last_inference_pil = session_data.get("last_inference_pil")
         if last_inference_pil is not None:
-            ref_images = [last_inference_pil] + uploaded_images + [pil_frame]
+            ref_images = [pil_frame] + [last_inference_pil] + uploaded_images
         else:
-            ref_images = uploaded_images + [pil_frame]
+            ref_images = [pil_frame] + uploaded_images
 
         res = settings.inference_resolution
         ref_images_resized = [img.resize((res, res)) for img in ref_images]

@@ -514,12 +514,20 @@
           });
           localVideo.srcObject = localStream;
 
+          updateStatus("connecting", "Fetching ICE servers...");
+
+          // Fetch TURN/STUN credentials from our backend (keeps API key server-side)
+          const iceResponse = await fetch("/ice-servers", {
+            headers: { "X-API-Key": apiKey },
+          });
+          if (!iceResponse.ok) {
+            throw new Error("Failed to fetch ICE server credentials");
+          }
+          const iceServers = await iceResponse.json();
+
           updateStatus("connecting", "Negotiating WebRTC offer...");
 
-          pc = new RTCPeerConnection({
-            iceServers: ICE_SERVERS_CONFIG,
-            iceTransportPolicy: "ICE_TRANSPORT_POLICY",
-          });
+          pc = new RTCPeerConnection({ iceServers: iceServers });
 
           // Add camera track to peer connection
           localStream.getTracks().forEach((track) => {
