@@ -1,7 +1,7 @@
 import { VoiceCloningForm } from "@/components/voice-cloning-form";
 import { notFound } from "next/navigation";
 
-const sessionIds = ["preboi", "magic-clone", "nucleus"];
+const sessionIds = ["preboi", "magic-clone", "nucleus", "messiahson"];
 
 export async function generateStaticParams() {
   return sessionIds.map((sessionId) => ({ sessionId }));
