@@ -3,11 +3,14 @@
 import { Badge } from "@/components/ui/badge";
 import { useIntervalEffect } from "@/hooks/use-interval-effect";
 import { getRunPodServerHealth } from "@/lib/actions";
+import { api } from "@repo/convex/api";
+import { useQuery } from "convex/react";
 import { useEffect, useEffectEvent, useState } from "react";
 
 export type ServerStatus = "initializing" | "overloaded" | "active" | "error";
 
 export function Header() {
+  const profile = useQuery(api.profile.get);
   const [serverStatus, setServerStatus] =
     useState<ServerStatus>("initializing");
 
@@ -38,20 +41,29 @@ export function Header() {
   }, 60000);
 
   return (
-    <header className="border-b border-zinc-200 bg-white px-4 py-3 sm:px-6 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="font-mono font-bold tracking-tight text-xs sm:text-sm uppercase whitespace-nowrap">Metamorph TTS</span>
-        <span className="text-zinc-300 text-xs">/</span>
-        <span className="text-zinc-500 text-xs font-mono whitespace-nowrap">Synthesizer</span>
+    <header className="flex flex-col justify-between gap-3 border-b border-zinc-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:px-6 sm:py-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-xs font-bold tracking-tight whitespace-nowrap uppercase sm:text-sm">
+          Metamorph TTS
+        </span>
+        <span className="text-xs text-zinc-300">/</span>
+        <span className="font-mono text-xs whitespace-nowrap text-zinc-500">
+          Synthesizer
+        </span>
       </div>
       <div className="flex items-center gap-2 self-start sm:self-auto">
-        <span className="text-xs text-zinc-500 font-mono whitespace-nowrap">Server Status:</span>
         <Badge
           variant="outline"
           data-status={serverStatus}
-          className="rounded-none font-mono text-[10px] uppercase border px-2 py-0.5 tracking-wider data-[status=active]:border-green-300 data-[status=active]:bg-green-50 data-[status=active]:text-green-800 data-[status=error]:border-red-300 data-[status=error]:bg-red-50 data-[status=error]:text-red-800 data-[status=initializing]:border-yellow-300 data-[status=initializing]:bg-yellow-50 data-[status=initializing]:text-yellow-800 data-[status=overloaded]:border-amber-300 data-[status=overloaded]:bg-amber-50 data-[status=overloaded]:text-amber-800"
+          className="rounded-none border px-2 py-0.5 font-mono text-[10px] tracking-wider uppercase data-[status=active]:border-green-300 data-[status=active]:bg-green-50 data-[status=active]:text-green-800 data-[status=error]:border-red-300 data-[status=error]:bg-red-50 data-[status=error]:text-red-800 data-[status=initializing]:border-yellow-300 data-[status=initializing]:bg-yellow-50 data-[status=initializing]:text-yellow-800 data-[status=overloaded]:border-amber-300 data-[status=overloaded]:bg-amber-50 data-[status=overloaded]:text-amber-800"
         >
           {serverStatus}
+        </Badge>
+        <Badge
+          variant="outline"
+          className="rounded-none border px-2 py-0.5 font-mono text-[10px] tracking-wider uppercase"
+        >
+          {profile?.ttsCredits ?? 0} Credits
         </Badge>
       </div>
     </header>

@@ -1,8 +1,10 @@
 "use server";
 
 import { runpodApi } from "@/lib/api-server";
+import { fetchAuthMutation } from "@/lib/auth-server";
 import { createRunPodJobSchema, RunPodPendingJob } from "@/lib/schema";
 import { done, handleApiError } from "@/lib/utils";
+import { api } from "@repo/convex/api";
 import { fromAsyncThrowable, fromPromise } from "neverthrow";
 import { RunPodTTSJobOutput, TTSFormSchema } from "./schema";
 
@@ -48,5 +50,11 @@ export async function getTTSJobStatus(jobId: string) {
     handleApiError,
   );
 
-  return done(response);
+  const result = done(response);
+
+  if (result.data?.status === "COMPLETED") {
+    await fetchAuthMutation(api.profile.decrementTTSCredit, { amount: 10 });
+  }
+
+  return result;
 }

@@ -17,7 +17,7 @@ export const TTSFormSchema = z.object({
   referenceText: z.string().min(1, "Reference text is required"),
   file: z
     .file("Please upload an audio file")
-    .min(1024 * 1024 * 1, "Audio file cannot be smaller than 1mb")
+    .min(1024 * 1024, "Audio file cannot be smaller than 1mb")
     .max(1024 * 1024 * 6, "Audio file cannot be bigger than 6mb")
     .mime(
       ["audio/mpeg", "audio/ogg", "audio/wav", "audio/webm"],

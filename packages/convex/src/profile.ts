@@ -1,7 +1,22 @@
 import { ConvexError, v } from "convex/values";
-import { authMutation } from "./function";
+import { authMutation, authQuery } from "./function";
 
-export const decrementTtsCredit = authMutation({
+export const get = authQuery({
+  handler: async (ctx) => {
+    const profile = await ctx.db
+      .query("profile")
+      .withIndex("by_userId", (q) => q.eq("userId", ctx.user.id))
+      .unique();
+
+    if (!profile) {
+      throw new ConvexError("User has an undeclared profile");
+    }
+
+    return profile;
+  },
+});
+
+export const decrementTTSCredit = authMutation({
   args: {
     amount: v.optional(v.number()),
   },
