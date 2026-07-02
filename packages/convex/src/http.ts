@@ -1,12 +1,8 @@
 import { httpRouter } from "convex/server";
-import { webhookTts } from "./inference";
+import { authComponent, createAuth } from "./betterAuth/auth";
 
 const http = httpRouter();
 
-http.route({
-  path: "/webhook/audio/tts",
-  method: "POST",
-  handler: webhookTts,
-});
+authComponent.registerRoutes(http, createAuth);
 
 export default http;
