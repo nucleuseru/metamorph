@@ -8,10 +8,8 @@
  * @module
  */
 
-import type * as function_ from "../function.js";
-import type * as http from "../http.js";
-import type * as profile from "../profile.js";
-import type * as triggers from "../triggers.js";
+import type * as adapter from "../adapter.js";
+import type * as auth from "../auth.js";
 
 import type {
   ApiFromModules,
@@ -21,10 +19,8 @@ import type {
 import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
-  function: typeof function_;
-  http: typeof http;
-  profile: typeof profile;
-  triggers: typeof triggers;
+  adapter: typeof adapter;
+  auth: typeof auth;
 }> = anyApi as any;
 
 /**
@@ -53,6 +49,4 @@ export const internal: FilterApi<
   FunctionReference<any, "internal">
 > = anyApi as any;
 
-export const components = componentsGeneric() as unknown as {
-  betterAuth: import("../betterAuth/_generated/component.js").ComponentApi<"betterAuth">;
-};
+export const components = componentsGeneric() as unknown as {};

@@ -16,5 +16,9 @@
   },
   "[dockerfile]": {
     "editor.defaultFormatter": "ms-azuretools.vscode-containers"
-  }
+  },
+  "cSpell.words": [
+    "Nuqs",
+    "RUNPOD"
+  ]
 }
