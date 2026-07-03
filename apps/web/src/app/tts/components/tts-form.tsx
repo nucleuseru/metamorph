@@ -76,7 +76,7 @@ export function TTSForm() {
     handleSubmit,
     setError,
     clearErrors,
-    formState: { errors, isLoading: isSubmitting },
+    formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(TTSFormSchema),
     defaultValues: {
@@ -293,10 +293,7 @@ export function TTSForm() {
   return (
     <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-12">
       {/* LEFT COLUMN: Input Configuration Form */}
-      <form
-        onSubmit={onSubmit}
-        className="space-y-6 border border-zinc-300 bg-white p-6 lg:col-span-7"
-      >
+      <form className="space-y-6 border border-zinc-300 bg-white p-6 lg:col-span-7">
         <div className="flex items-center justify-between border-b border-zinc-200 pb-3">
           <h2 className="font-mono text-sm font-bold tracking-wider text-zinc-900 uppercase">
             TTS Synthesizer Settings
@@ -427,8 +424,7 @@ export function TTSForm() {
                 )}
 
                 <FieldDescription className="font-mono text-[10px] text-zinc-400">
-                  Provide an audio sample of the voice structure to
-                  clone.
+                  Provide an audio sample of the voice structure to clone.
                 </FieldDescription>
                 {fieldState.invalid && (
                   <FieldError
@@ -529,7 +525,8 @@ export function TTSForm() {
 
         <div className="border-t border-zinc-200 pt-4">
           <Button
-            type="submit"
+            type="button"
+            onClick={(e) => void onSubmit(e)}
             disabled={isSubmitting || isPending}
             className="flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-none border border-black bg-black py-2.5 font-mono text-xs font-bold tracking-wider text-white uppercase transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:border-zinc-200 disabled:bg-zinc-100 disabled:text-zinc-400"
           >
