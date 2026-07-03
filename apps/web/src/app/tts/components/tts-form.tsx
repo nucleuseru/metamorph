@@ -427,7 +427,7 @@ export function TTSForm() {
                 )}
 
                 <FieldDescription className="font-mono text-[10px] text-zinc-400">
-                  Provide a 2MB - 6MB audio sample of the voice structure to
+                  Provide an audio sample of the voice structure to
                   clone.
                 </FieldDescription>
                 {fieldState.invalid && (
