@@ -370,7 +370,7 @@ export function TTSForm() {
                       Click to upload voice reference
                     </span>
                     <span className="font-mono text-[10px] text-zinc-400">
-                      Accepts MP3, WAV, OGG, WEBM (2MB - 6MB)
+                      Accepts MP3, WAV, OGG, WEBM
                     </span>
                   </div>
                 ) : (
