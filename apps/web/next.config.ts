@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
   reactCompiler: true,
   experimental: {
     typedEnv: true,
+    serverActions: {
+      bodySizeLimit: "10mb",
+    },
   },
   allowedDevOrigins: ["10.79.162.200"],
 };
