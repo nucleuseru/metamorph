@@ -1,32 +1,21 @@
 "use server";
 
-import { runpodApi } from "@/lib/api-server";
 import { RunPodCancelledJob, RunPodHealth } from "@/lib/schema";
-import { fromPromise } from "neverthrow";
-import { done, handleApiError } from "./utils";
+import { err, ok } from "@/lib/utils";
+import { runpodApi } from "./api-server";
 
 export async function cancelJob(jobId: string) {
-  const response = await fromPromise(
-    runpodApi
-      .post(`/cancel/${jobId}`, undefined, {
-        output: RunPodCancelledJob,
-      })
-      .then((r) => r.data),
-    handleApiError,
-  );
+  const response = await runpodApi.post(`/cancel/${jobId}`, {
+    outputSchema: RunPodCancelledJob,
+  });
 
-  return done(response);
+  return response.match((v) => ok(v.data), err);
 }
 
 export async function getRunPodServerHealth() {
-  const response = await fromPromise(
-    runpodApi
-      .get("/health", {
-        output: RunPodHealth,
-      })
-      .then((r) => r.data),
-    handleApiError,
-  );
+  const response = await runpodApi.get("/health", {
+    outputSchema: RunPodHealth,
+  });
 
-  return done(response);
+  return response.match((v) => ok(v.data.workers), err);
 }

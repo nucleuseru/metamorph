@@ -1,8 +1,12 @@
 import { useEffect, useRef } from "react";
 
-export function useIntervalEffect(callback: () => void, delay: number | null) {
+export function usePollEffect(callback: () => void, delay: number | null) {
   const savedCallback = useRef(callback);
   const tick = () => savedCallback.current();
+
+  useEffect(() => {
+    if (delay !== null) tick();
+  }, []);
 
   useEffect(() => {
     savedCallback.current = callback;

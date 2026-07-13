@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { authClient } from "@/lib/auth-client";
+import { auth } from "@/lib/auth-client";
 import {
   ArrowRight,
   Eye,
@@ -51,7 +51,7 @@ export function LoginForm() {
 
     try {
       if (mode === "signin") {
-        const res = await authClient.signIn.username({
+        const res = await auth.signIn.username({
           password,
           username: trimmedUsername,
         });
@@ -68,7 +68,7 @@ export function LoginForm() {
           router.refresh();
         }
       } else {
-        const res = await authClient.signUp.email({
+        const res = await auth.signUp.email({
           email,
           password,
           name: trimmedUsername,
