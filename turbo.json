@@ -4,7 +4,12 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "RUNPOD_API_URL",
+        "RUNPOD_API_KEY",
+        ".env*"
+      ],
       "outputs": [".next/**", "!.next/cache/**", "dist/**", ".expo/**"]
     },
     "lint": {
