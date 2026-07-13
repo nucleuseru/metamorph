@@ -32,12 +32,12 @@ export function TextInput({ control, disabled }: TextInputProps) {
         <span
           className={cn(
             "font-mono text-[10px]",
-            (field.value?.length || 0) > TEXT_MAX_LENGTH
+            (field.value.length || 0) > TEXT_MAX_LENGTH
               ? "font-bold text-red-500"
               : "text-muted-foreground",
           )}
         >
-          {field.value?.length || 0} / {TEXT_MAX_LENGTH} chars
+          {field.value.length || 0} / {TEXT_MAX_LENGTH} chars
         </span>
       </div>
       <Textarea
@@ -48,10 +48,10 @@ export function TextInput({ control, disabled }: TextInputProps) {
         onChange={(e) => {
           const text = e.currentTarget.value;
           field.onChange(text);
-          setText(text, { startTransition });
+          void setText(text, { startTransition });
         }}
       />
-      <FieldDescription>
+      <FieldDescription className="text-xs">
         The script that will be synthetically read by the cloned voice model.
       </FieldDescription>
       {fieldState.invalid && <FieldError errors={[fieldState.error]} />}

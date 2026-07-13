@@ -18,7 +18,10 @@ export const TTSFormSchema = z.object({
   text: z
     .string()
     .min(1, `This field is required`)
-    .max(TEXT_MAX_LENGTH, `Text cannot exceed ${TEXT_MAX_LENGTH} characters`),
+    .max(
+      TEXT_MAX_LENGTH,
+      `Text cannot exceed ${TEXT_MAX_LENGTH.toString()} characters`,
+    ),
   referenceText: z.string().min(1, "This field is required"),
   file: z
     .file("Please upload an audio file")
@@ -34,7 +37,7 @@ export const TTSFormSchema = z.object({
         return duration >= AUDIO_MIN_DURATION && duration <= AUDIO_MAX_DURATION;
       },
       {
-        message: `Audio duration must be between ${AUDIO_MIN_DURATION}s and ${AUDIO_MAX_DURATION}s`,
+        message: `Audio duration must be between ${AUDIO_MIN_DURATION.toString()}s and ${AUDIO_MAX_DURATION.toString()}s`,
       },
     ),
 });

@@ -5,11 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { auth } from "@/lib/auth-client";
 import {
-  ArrowRight,
-  Eye,
-  EyeSlash,
-  Spinner,
-  Terminal,
+  ArrowRightIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  SpinnerIcon,
+  TerminalIcon,
 } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -25,7 +25,7 @@ export function LoginForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
 
@@ -49,47 +49,41 @@ export function LoginForm() {
       ? trimmedUsername.toLowerCase()
       : `${trimmedUsername.toLowerCase()}@metamorph.local`;
 
-    try {
-      if (mode === "signin") {
-        const res = await auth.signIn.username({
-          password,
-          username: trimmedUsername,
-        });
+    if (mode === "signin") {
+      const res = await auth.signIn.username({
+        password,
+        username: trimmedUsername,
+      });
 
-        if (res.error) {
-          setError(
-            res.error.message ||
-              "Failed to sign in. Please verify credentials.",
-          );
-          toast.error(res.error.message || "Authentication failed");
-        } else {
-          toast.success("System access granted. Redirecting...");
-          router.push("/tts");
-          router.refresh();
-        }
+      if (res.error) {
+        setError(
+          res.error.message ?? "Failed to sign in. Please verify credentials.",
+        );
+        toast.error(res.error.message ?? "Authentication failed");
       } else {
-        const res = await auth.signUp.email({
-          email,
-          password,
-          name: trimmedUsername,
-          username: trimmedUsername,
-        });
-
-        if (res.error) {
-          setError(res.error.message || "Failed to create account.");
-          toast.error(res.error.message || "Registration failed");
-        } else {
-          toast.success("Account created successfully. Logging in...");
-          router.push("/tts");
-          router.refresh();
-        }
+        toast.success("System access granted. Redirecting...");
+        router.push("/tts");
+        router.refresh();
       }
-    } catch (err: any) {
-      setError(err.message || "An unexpected error occurred.");
-      toast.error(err.message || "Operation failed");
-    } finally {
-      setIsLoading(false);
+    } else {
+      const res = await auth.signUp.email({
+        email,
+        password,
+        name: trimmedUsername,
+        username: trimmedUsername,
+      });
+
+      if (res.error) {
+        setError(res.error.message ?? "Failed to create account.");
+        toast.error(res.error.message ?? "Registration failed");
+      } else {
+        toast.success("Account created successfully. Logging in...");
+        router.push("/tts");
+        router.refresh();
+      }
     }
+
+    setIsLoading(false);
   };
 
   return (
@@ -108,7 +102,7 @@ export function LoginForm() {
         {/* Terminal Title Bar */}
         <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-50 px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40">
           <div className="flex items-center gap-1.5 font-mono text-[10px] font-bold tracking-wider text-zinc-400 uppercase">
-            <Terminal className="size-3.5 text-zinc-500" />
+            <TerminalIcon className="size-3.5 text-zinc-500" />
             <span>METAMORPH SYSTEM ACCESS</span>
           </div>
           <div className="flex gap-1.5">
@@ -152,7 +146,7 @@ export function LoginForm() {
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4 p-6">
+        <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4 p-6">
           {error && (
             <div className="border border-red-200 bg-red-50/50 p-3 text-xs text-red-700 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400">
               <div className="mb-0.5 font-bold">ERROR_LOG:</div>
@@ -174,7 +168,9 @@ export function LoginForm() {
                 type="text"
                 placeholder="Enter username"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                }}
                 disabled={isLoading}
                 className="h-9 border-zinc-200 pr-3 pl-7 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700"
                 required
@@ -195,21 +191,25 @@ export function LoginForm() {
                 type={showPassword ? "text" : "password"}
                 placeholder="••••••••"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                }}
                 disabled={isLoading}
                 className="h-9 border-zinc-200 pr-10 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700"
                 required
               />
               <button
                 type="button"
-                onClick={() => setShowPassword(!showPassword)}
+                onClick={() => {
+                  setShowPassword(!showPassword);
+                }}
                 tabIndex={-1}
                 className="absolute top-2.5 right-3 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
               >
                 {showPassword ? (
-                  <EyeSlash className="size-4" />
+                  <EyeSlashIcon className="size-4" />
                 ) : (
-                  <Eye className="size-4" />
+                  <EyeIcon className="size-4" />
                 )}
               </button>
             </div>
@@ -229,7 +229,9 @@ export function LoginForm() {
                   type={showPassword ? "text" : "password"}
                   placeholder="••••••••"
                   value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  onChange={(e) => {
+                    setConfirmPassword(e.target.value);
+                  }}
                   disabled={isLoading}
                   className="h-9 border-zinc-200 pr-10 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700"
                   required
@@ -246,7 +248,7 @@ export function LoginForm() {
             >
               {isLoading ? (
                 <>
-                  <Spinner className="size-3.5 animate-spin" />
+                  <SpinnerIcon className="size-3.5 animate-spin" />
                   <span>PROCESSING...</span>
                 </>
               ) : (
@@ -254,7 +256,7 @@ export function LoginForm() {
                   <span>
                     {mode === "signin" ? "AUTHENTICATE" : "REGISTER ACCOUNT"}
                   </span>
-                  <ArrowRight className="size-3.5" />
+                  <ArrowRightIcon className="size-3.5" />
                 </>
               )}
             </Button>

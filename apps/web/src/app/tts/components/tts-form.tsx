@@ -6,8 +6,7 @@ import { cancelJob } from "@/lib/actions";
 import { ERROR_CODE } from "@/lib/constants";
 import {
   convertBase64AudioToOgg,
-  convertMediaToOgg,
-  reduceBackgroundNoise,
+  processVoiceInput,
 } from "@/lib/ffmpeg-client";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -32,9 +31,7 @@ export interface TTSFormProps {
 
 export function TTSForm({ job }: TTSFormProps) {
   const [jobId, setJobId] = useQueryState("jobId");
-  const [jobStatus, setJobStatus] = useState<string | null>(
-    job?.status ?? null,
-  );
+  const [jobStatus, setJobStatus] = useState(job?.status ?? null);
   const [outputAudioUrl, setOutputAudioUrl] = useState<string | null>(null);
   const [isCancelling, startCancelTransition] = useTransition();
 
@@ -75,9 +72,7 @@ export function TTSForm({ job }: TTSFormProps) {
 
     setJobStatus(null);
 
-    const processedFile = await reduceBackgroundNoise(data.file).andThen(
-      convertMediaToOgg,
-    );
+    const processedFile = await processVoiceInput(data.file);
 
     const formData = new FormData();
     formData.append("text", data.text);
@@ -90,7 +85,8 @@ export function TTSForm({ job }: TTSFormProps) {
     const result = await runTTSJob(formData);
 
     if (!result.success) {
-      return setError("root", { message: result.error });
+      setError("root", { message: result.error });
+      return;
     }
 
     await setJobId(result.data.id);
@@ -102,16 +98,18 @@ export function TTSForm({ job }: TTSFormProps) {
 
     switch (job.status) {
       case "FAILED":
-        return setError("root", {
+        setError("root", {
           message:
             "Encountered an error while generating audio. Ensure you are using a safe reference audio, or change the reference audio",
         });
+        return;
       case "TIMED_OUT":
-        return setError("root", {
+        setError("root", {
           message:
             "Audio generation timed out, reduce the text length to generate a shorter audio",
         });
-      case "COMPLETED":
+        return;
+      case "COMPLETED": {
         const file = await convertBase64AudioToOgg(
           job.output.audio,
           job.output.format,
@@ -119,30 +117,36 @@ export function TTSForm({ job }: TTSFormProps) {
 
         if (file.isErr()) {
           setJobStatus("FAILED");
-          return setError("root", {
+          setError("root", {
             message: "Encountered an error while processing audio output",
           });
+          return;
         }
 
         setOutputAudioUrl((prevUrl) => {
           if (prevUrl) URL.revokeObjectURL(prevUrl);
           return URL.createObjectURL(file.value);
         });
+      }
     }
   };
 
   useEffect(() => {
     if (!job) return;
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void handleJobResponse(job);
-  }, [job]);
+  }, []);
 
   usePollEffect(
     async () => {
-      const res = await getTTSJobStatus(jobId!);
+      if (!jobId) return;
+      const res = await getTTSJobStatus(jobId);
 
       if (!res.success) {
         setJobStatus("FAILED");
-        return setError("root", { message: res.error });
+        setError("root", { message: res.error });
+        return;
       }
 
       await handleJobResponse(res.data);
@@ -151,7 +155,10 @@ export function TTSForm({ job }: TTSFormProps) {
   );
 
   return (
-    <form className="border-border bg-card space-y-6 border p-6 lg:col-span-7">
+    <form
+      className="border-border bg-card space-y-6 border p-6 lg:col-span-7"
+      onSubmit={(e) => void onSubmit(e)}
+    >
       {errors.root?.message && (
         <div className="flex items-center gap-2 border border-red-300 bg-red-50 p-3 text-xs text-red-800">
           <WarningCircleIcon
@@ -185,8 +192,7 @@ export function TTSForm({ job }: TTSFormProps) {
 
       <div className="border-border flex flex-col gap-4 border-t pt-4 sm:flex-row sm:justify-start">
         <Button
-          type="button"
-          onClick={onSubmit}
+          type="submit"
           disabled={isSubmitting || isPending}
           variant={isSubmitting || isPending ? "ghost" : "default"}
         >

@@ -10,7 +10,7 @@ const mediaMap: Record<string, string> = {
 };
 
 export function getMediaExtension(mimeType: string) {
-  return mediaMap?.[mimeType] ?? mimeType.split("/")[1]?.split(";")[0] ?? "bin";
+  return mediaMap[mimeType] ?? mimeType.split("/")[1]?.split(";")[0] ?? "bin";
 }
 
 export function getMediaDuration(fileOrUrl: string | File | Blob) {
@@ -35,7 +35,7 @@ export function getMediaDuration(fileOrUrl: string | File | Blob) {
         if (fileOrUrl instanceof File || fileOrUrl instanceof Blob) {
           URL.revokeObjectURL(objectUrl);
         }
-        rej();
+        rej(new Error());
       });
 
       audio.src = objectUrl;

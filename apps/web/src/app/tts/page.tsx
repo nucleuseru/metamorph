@@ -1,9 +1,9 @@
+import { runpodApi } from "@/lib/api-server";
 import { isAuthenticated } from "@/lib/auth-server";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Header } from "./components/header";
 import { TTSForm } from "./components/tts-form";
-import { runpodApi } from "@/lib/api-server";
 import { RunPodTTSJob } from "./lib/schema";
 
 export const metadata: Metadata = {
@@ -21,11 +21,11 @@ export default async function TTSPage({ searchParams }: PageProps<"/tts">) {
 
   const { jobId } = await searchParams;
 
-  const response = await runpodApi.get(`/status/${jobId}`, {
+  const response = await runpodApi.get(`/status/${jobId.toString()}`, {
     outputSchema: RunPodTTSJob,
   });
 
-  const job = response.isOk() ? response.value.data : null
+  const job = response.isOk() ? response.value.data : null;
 
   return (
     <main className="flex min-h-screen flex-col">

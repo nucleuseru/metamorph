@@ -39,10 +39,10 @@ export function ReferenceTranscription({
         onChange={(e) => {
           const text = e.currentTarget.value;
           field.onChange(text);
-          setReferenceText(text, { startTransition });
+          void setReferenceText(text, { startTransition });
         }}
       />
-      <FieldDescription>
+      <FieldDescription className="text-xs">
         This text must matches the reference audio.
       </FieldDescription>
       {fieldState.invalid && <FieldError errors={[fieldState.error]} />}

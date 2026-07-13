@@ -58,7 +58,7 @@ const apiDataMethod =
   ) =>
     fromPromise(
       (async () => {
-        if (config?.inputSchema && config?.data) {
+        if (config?.inputSchema && config.data) {
           config.data = await config.inputSchema.parseAsync(config.data);
         }
 
@@ -82,17 +82,17 @@ export function createApi<T>(config?: CreateAxiosDefaults<T>) {
 
   return {
     ...api,
-    get: apiMethod(api.get),
-    delete: apiMethod(api.delete),
-    head: apiMethod(api.head),
-    options: apiMethod(api.options),
-    post: apiDataMethod(api.post),
-    put: apiDataMethod(api.put),
-    patch: apiDataMethod(api.patch),
-    postForm: apiDataMethod(api.postForm),
-    putForm: apiDataMethod(api.putForm),
-    patchForm: apiDataMethod(api.patchForm),
-    query: apiDataMethod(api.query),
+    get: apiMethod(api.get.bind(api)),
+    delete: apiMethod(api.delete.bind(api)),
+    head: apiMethod(api.head.bind(api)),
+    options: apiMethod(api.options.bind(api)),
+    post: apiDataMethod(api.post.bind(api)),
+    put: apiDataMethod(api.put.bind(api)),
+    patch: apiDataMethod(api.patch.bind(api)),
+    postForm: apiDataMethod(api.postForm.bind(api)),
+    putForm: apiDataMethod(api.putForm.bind(api)),
+    patchForm: apiDataMethod(api.patchForm.bind(api)),
+    query: apiDataMethod(api.query.bind(api)),
   };
 }
 

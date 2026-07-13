@@ -40,7 +40,7 @@ export function ReferenceAudioUpload({
         ref={fileInputRef}
         name={field.name}
         onBlur={field.onBlur}
-        disabled={field.disabled || formState.isSubmitting || disabled}
+        disabled={!!field.disabled || formState.isSubmitting || disabled}
         onChange={(e) => {
           const file = e.currentTarget.files?.item(0);
           field.onChange(file);
@@ -54,7 +54,7 @@ export function ReferenceAudioUpload({
         }}
       />
 
-      {!field.value ? (
+      {(!field.value as boolean) ? (
         <div
           onClick={() =>
             !formState.isSubmitting &&
@@ -120,7 +120,7 @@ export function ReferenceAudioUpload({
         </div>
       )}
 
-      <FieldDescription>
+      <FieldDescription className="text-xs">
         Provide an audio sample of the voice structure to clone.
       </FieldDescription>
       {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
