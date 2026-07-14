@@ -1,6 +1,5 @@
 import { ConvexClientProvider } from "@/components/convex-client-provider";
 import { Toaster } from "@/components/ui/sonner";
-import { getToken } from "@/lib/auth-server";
 import { cn } from "@/lib/utils";
 import type { Metadata } from "next";
 import { JetBrains_Mono } from "next/font/google";
@@ -16,13 +15,11 @@ export const metadata: Metadata = {
   title: "Metamorph",
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const token = await getToken();
-
   return (
     <html
       lang="en"
@@ -33,7 +30,7 @@ export default async function RootLayout({
         jetbrainsMono.variable,
       )}
     >
-      <ConvexClientProvider initialToken={token}>
+      <ConvexClientProvider>
         <body className="flex min-h-full flex-col">
           <NuqsAdapter>{children}</NuqsAdapter>
           <Toaster />
