@@ -9,6 +9,7 @@
  */
 
 import type * as function_ from "../function.js";
+import type * as helper from "../helper.js";
 import type * as http from "../http.js";
 import type * as profile from "../profile.js";
 import type * as triggers from "../triggers.js";
@@ -22,6 +23,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   function: typeof function_;
+  helper: typeof helper;
   http: typeof http;
   profile: typeof profile;
   triggers: typeof triggers;

@@ -34,7 +34,7 @@ Extend the shared configuration in your project's `tsconfig.json`:
 
 ```json
 {
-  "extends": "@repo/tsconfig/base.json",
+  "extends": "@repo/tsconfig",
   "compilerOptions": {
     "outDir": "dist"
   },

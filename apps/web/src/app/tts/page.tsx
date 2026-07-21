@@ -21,7 +21,7 @@ export default async function TTSPage({ searchParams }: PageProps<"/tts">) {
 
   const { jobId } = await searchParams;
 
-  const response = await runpodApi.get(`/status/${jobId.toString()}`, {
+  const response = await runpodApi.get(`/status/${jobId?.toString() ?? ""}`, {
     outputSchema: RunPodTTSJob,
   });
 
