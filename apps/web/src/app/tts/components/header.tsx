@@ -2,12 +2,16 @@
 
 import { Badge } from "@/components/ui/badge";
 import { api } from "@repo/convex/api";
-import { useQuery } from "convex/react";
+import { Preloaded, usePreloadedQuery } from "convex/react";
 
 export type ServerStatus = "initializing" | "overloaded" | "active" | "error";
 
-export function Header() {
-  const profile = useQuery(api.profile.get);
+export interface HeaderProps {
+  profileQuery: Preloaded<typeof api.profile.get>;
+}
+
+export function Header({ profileQuery }: HeaderProps) {
+  const profile = usePreloadedQuery(profileQuery);
 
   return (
     <header className="border-border bg-card flex justify-between gap-3 border-b px-4 py-3 sm:px-6 sm:py-4">
@@ -16,7 +20,7 @@ export function Header() {
         variant="outline"
         className="rounded-none border px-2 py-0.5 text-xs tracking-wider uppercase"
       >
-        {profile?.ttsCredits ?? 0} Credits
+        {profile.ttsCredits} Credits
       </Badge>
     </header>
   );

@@ -1,5 +1,6 @@
 import { runpodApi } from "@/lib/api-server";
-import { isAuthenticated } from "@/lib/auth-server";
+import { isAuthenticated, preloadAuthQuery } from "@/lib/auth-server";
+import { api } from "@repo/convex/api";
 import { RunPodTTSJob } from "@repo/schemas/runpod";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
@@ -18,18 +19,25 @@ export default async function TTSPage({ searchParams }: PageProps<"/tts">) {
   if (!authenticated) {
     redirect("/");
   }
+  const [profileQuery, job] = await Promise.all([
+    preloadAuthQuery(api.profile.get),
+    (async () => {
+      const { jobId } = await searchParams;
 
-  const { jobId } = await searchParams;
+      const response = await runpodApi.get(
+        `/status/${jobId?.toString() ?? ""}`,
+        {
+          outputSchema: RunPodTTSJob,
+        },
+      );
 
-  const response = await runpodApi.get(`/status/${jobId?.toString() ?? ""}`, {
-    outputSchema: RunPodTTSJob,
-  });
-
-  const job = response.isOk() ? response.value.data : null;
+      return response.isOk() ? response.value.data : null;
+    })(),
+  ]);
 
   return (
     <main className="flex min-h-screen flex-col">
-      <Header />
+      <Header profileQuery={profileQuery} />
       <div className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 md:px-8">
         <TTSForm job={job} />
       </div>
