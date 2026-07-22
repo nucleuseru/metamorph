@@ -14,13 +14,14 @@ import {
   SpinnerIcon,
   WarningCircleIcon,
 } from "@phosphor-icons/react";
+import { RunPodTTSJob } from "@repo/schemas/runpod";
 import { useQueryState } from "nuqs";
 import { useEffect, useState, useTransition } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import z from "zod";
 import { getTTSJobStatus, runTTSJob } from "../actions";
-import { RunPodTTSJob, TTSFormSchema } from "../lib/schema";
+import { TTSFormSchema } from "../lib/schema";
 import { ReferenceAudioUpload } from "./reference-audio-upload";
 import { ReferenceTranscription } from "./reference-transcription";
 import { TextInput } from "./text-input";

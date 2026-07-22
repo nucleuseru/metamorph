@@ -1,14 +1,5 @@
 import { getMediaDuration } from "@/lib/media";
-import { createRunPodJobSchema } from "@/lib/schema";
 import z from "zod";
-
-export const RunPodTTSJobOutput = z.object({
-  audio: z.base64(),
-  format: z.string(),
-  sample_rate: z.number(),
-});
-
-export const RunPodTTSJob = createRunPodJobSchema(RunPodTTSJobOutput);
 
 export const TEXT_MAX_LENGTH = 500;
 export const AUDIO_MIN_DURATION = 10;

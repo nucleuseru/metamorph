@@ -46,3 +46,11 @@ export const RunPodHealth = z.object({
     initializing: z.number(),
   }),
 });
+
+export const RunPodTTSJobOutput = z.object({
+  audio: z.base64(),
+  format: z.string(),
+  sample_rate: z.number(),
+});
+
+export const RunPodTTSJob = createRunPodJobSchema(RunPodTTSJobOutput);

@@ -24,7 +24,6 @@ export const createAuthOptions = (ctx: GenericCtx<DataModel>) => {
     appName: "Metamorph",
     baseURL: process.env.SITE_URL,
     secret: process.env.BETTER_AUTH_SECRET,
-    trustedOrigins: ["http://localhost:3000", process.env.SITE_URL],
     database: authComponent.adapter(ctx),
     emailAndPassword: {
       enabled: true,

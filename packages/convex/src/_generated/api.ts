@@ -13,6 +13,7 @@ import type * as helper from "../helper.js";
 import type * as http from "../http.js";
 import type * as profile from "../profile.js";
 import type * as triggers from "../triggers.js";
+import type * as webhook from "../webhook.js";
 
 import type {
   ApiFromModules,
@@ -27,6 +28,7 @@ const fullApi: ApiFromModules<{
   http: typeof http;
   profile: typeof profile;
   triggers: typeof triggers;
+  webhook: typeof webhook;
 }> = anyApi as any;
 
 /**

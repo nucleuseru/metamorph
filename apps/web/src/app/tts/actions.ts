@@ -1,11 +1,17 @@
 "use server";
 
 import { runpodApi } from "@/lib/api-server";
-import { RunPodPendingJob } from "@/lib/schema";
+import { fetchAuthQuery } from "@/lib/auth-server";
 import { err, ok } from "@/lib/utils";
-import { RunPodTTSJob, TTSFormSchema } from "./lib/schema";
+import { api } from "@repo/convex/api";
+import { RunPodPendingJob, RunPodTTSJob } from "@repo/schemas/runpod";
+import { TTSFormSchema } from "./lib/schema";
 
 export async function runTTSJob(formData: FormData) {
+  const profile = await fetchAuthQuery(api.profile.get);
+
+  if (profile.ttsCredits < 10) return err("Insufficient balance");
+
   const validationResult = await TTSFormSchema.safeParseAsync({
     text: formData.get("text"),
     file: formData.get("file"),
@@ -18,6 +24,10 @@ export async function runTTSJob(formData: FormData) {
 
   const response = await runpodApi.post("/run", {
     data: {
+      webhook: new URL(
+        `/api/webhook/runpod?type=tts&userId=${profile.userId}`,
+        process.env.NEXT_PUBLIC_SITE_URL,
+      ).toString(),
       input: {
         text: data.text,
         references: [
@@ -43,5 +53,3 @@ export async function getTTSJobStatus(jobId: string) {
 
   return response.match((v) => ok(v.data), err);
 }
-
-// TODO: Implement a web hook to automatically decrement credit on successful jobs

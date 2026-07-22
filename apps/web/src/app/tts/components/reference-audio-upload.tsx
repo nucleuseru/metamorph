@@ -84,11 +84,11 @@ export function ReferenceAudioUpload({
               </div>
               <div className="flex flex-col">
                 <span className="text-muted-foreground max-w-60 truncate font-mono text-xs font-bold">
-                  {(field.value as File).name.slice(0, 10)}...
+                  {field.value.name.slice(0, 10)}...
                 </span>
                 <span className="text-muted-foreground font-mono text-[10px]">
-                  {((field.value as File).size / (1024 * 1024)).toFixed(2)} MB •{" "}
-                  {(field.value as File).type}
+                  {(field.value.size / (1024 * 1024)).toFixed(2)} MB •{" "}
+                  {field.value.type}
                 </span>
               </div>
             </div>

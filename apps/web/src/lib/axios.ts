@@ -38,8 +38,7 @@ const apiMethod =
       })(),
       (e) =>
         e as
-          | AxiosError<T, never>
-          | (O extends z.ZodType ? z.ZodError<T> : never),
+          AxiosError<T, never> | (O extends z.ZodType ? z.ZodError<T> : never),
     );
 
 const apiDataMethod =

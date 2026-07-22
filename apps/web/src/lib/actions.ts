@@ -1,7 +1,7 @@
 "use server";
 
-import { RunPodCancelledJob, RunPodHealth } from "@/lib/schema";
 import { err, ok } from "@/lib/utils";
+import { RunPodCancelledJob, RunPodHealth } from "@repo/schemas/runpod";
 import { runpodApi } from "./api-server";
 
 export async function cancelJob(jobId: string) {

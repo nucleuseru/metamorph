@@ -1,0 +1,23 @@
+{
+  "name": "@repo/schemas",
+  "version": "0.0.0",
+  "private": true,
+  "license": "ISC",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./runpod": "./src/runpod.ts"
+  },
+  "scripts": {
+    "lint": "eslint . --fix",
+    "check-types": "tsc --noEmit",
+    "clean": "rm -fr node_modules"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "@repo/tsconfig": "workspace:*"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

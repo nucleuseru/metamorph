@@ -1,5 +1,5 @@
 import { authComponent, createAuth } from "./betterAuth/auth";
-import { mutation } from "./function";
+import { internalMutation } from "./function";
 
 const users = [
   { username: "preboi", password: "preboi-acc", credits: 700 },
@@ -8,7 +8,7 @@ const users = [
   { username: "magikclone", password: "magic-clone-acc", credits: 900 },
 ];
 
-export const seed = mutation({
+export const seed = internalMutation({
   args: {},
   handler: async (ctx) => {
     const { auth } = await authComponent.getAuth(createAuth, ctx);

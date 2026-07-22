@@ -1,10 +1,10 @@
 import { runpodApi } from "@/lib/api-server";
 import { isAuthenticated } from "@/lib/auth-server";
+import { RunPodTTSJob } from "@repo/schemas/runpod";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Header } from "./components/header";
 import { TTSForm } from "./components/tts-form";
-import { RunPodTTSJob } from "./lib/schema";
 
 export const metadata: Metadata = {
   title: "Text-to-Speech | Metamorph",

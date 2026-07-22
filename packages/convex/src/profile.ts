@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { authMutation, authQuery } from "./function";
+import { authQuery, internalMutation } from "./function";
 
 export const get = authQuery({
   handler: async (ctx) => {
@@ -16,14 +16,15 @@ export const get = authQuery({
   },
 });
 
-export const decrementTTSCredit = authMutation({
+export const decrementTTSCredit = internalMutation({
   args: {
+    userId: v.string(),
     amount: v.optional(v.number()),
   },
-  handler: async (ctx, { amount = 10 }) => {
+  handler: async (ctx, { userId, amount = 10 }) => {
     const profile = await ctx.db
       .query("profile")
-      .withIndex("by_userId", (q) => q.eq("userId", ctx.user.id))
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
       .unique();
 
     if (!profile) {
