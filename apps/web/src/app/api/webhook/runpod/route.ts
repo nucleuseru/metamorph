@@ -12,8 +12,10 @@ export async function POST(request: NextRequest) {
     const requestUrl = new URL(request.url);
     const type = requestUrl.searchParams.get("type");
     const userId = requestUrl.searchParams.get("userId");
-    const targetPath = `/webhook/runpod${requestUrl.pathname}${requestUrl.search}`;
-    const nextUrl = new URL(targetPath, CONVEX_SITE_URL).toString();
+    const nextUrl = new URL(
+      `/webhook/runpod${requestUrl.search}`,
+      CONVEX_SITE_URL,
+    ).toString();
 
     const headers = new Headers(request.headers);
 
