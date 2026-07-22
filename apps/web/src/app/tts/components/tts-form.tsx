@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { usePollEffect } from "@/hooks/use-poll-effect";
 import { cancelJob } from "@/lib/actions";
 import { ERROR_CODE } from "@/lib/constants";
@@ -10,6 +10,7 @@ import {
 } from "@/lib/ffmpeg-client";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
+  DownloadIcon,
   SparkleIcon,
   SpinnerIcon,
   WarningCircleIcon,
@@ -187,7 +188,20 @@ export function TTSForm({ job }: TTSFormProps) {
           <span className="text-muted-foreground font-mono text-[9px] font-bold uppercase">
             Output Preview:
           </span>
-          <audio src={outputAudioUrl} controls className="h-8 w-full text-xs" />
+          <div className="flex gap-2 sm:gap-4">
+            <audio
+              src={outputAudioUrl}
+              controls
+              className="h-8 w-full text-xs"
+            />
+            <a
+              className={buttonVariants({ variant: "outline", size: "icon" })}
+              href={outputAudioUrl}
+              download
+            >
+              <DownloadIcon />
+            </a>
+          </div>
         </div>
       )}
 

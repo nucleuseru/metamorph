@@ -21,13 +21,14 @@ export async function runTTSJob(formData: FormData) {
   if (!validationResult.success) return err("Bad request");
 
   const { data } = validationResult;
+  const webhookUrl = new URL(
+    `/api/webhook/runpod?type=tts&userId=${profile.userId}`,
+    process.env.NEXT_PUBLIC_SITE_URL,
+  ).toString();
 
   const response = await runpodApi.post("/run", {
     data: {
-      webhook: new URL(
-        `/api/webhook/runpod?type=tts&userId=${profile.userId}`,
-        process.env.NEXT_PUBLIC_SITE_URL,
-      ).toString(),
+      webhook: process.env.NODE_ENV === "production" ? webhookUrl : undefined,
       input: {
         text: data.text,
         references: [
