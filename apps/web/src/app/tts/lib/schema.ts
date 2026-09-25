@@ -2,8 +2,8 @@ import { getMediaDuration } from "@/lib/media";
 import z from "zod";
 
 export const TEXT_MAX_LENGTH = 500;
-export const AUDIO_MIN_DURATION = 10;
-export const AUDIO_MAX_DURATION = 120;
+export const AUDIO_MIN_DURATION = 3;
+export const AUDIO_MAX_DURATION = 60;
 
 export const TTSFormSchema = z.object({
   text: z
