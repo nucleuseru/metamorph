@@ -26,6 +26,21 @@ Python version is pinned via `.python-version` (`3.12`, `requires-python = ">=3.
 
 ## Adding a New Package
 
+Use Turborepo's custom generators in `turbo/generators/config.ts` to scaffold either package type:
+
+```bash
+pnpm gen                         # Interactive selector (ts-package or py-package)
+pnpm turbo gen ts-package        # TypeScript package (@metamorph/<name>)
+pnpm turbo gen py-package        # Python package (packages/<name>-py)
+```
+
+Or pass the package name directly with `--args`:
+
+```bash
+pnpm turbo gen ts-package --args <name>
+pnpm turbo gen py-package --args <name>
+```
+
 ### New TypeScript Package
 
 1. Create `packages/<name>/package.json` with `"name": "@metamorph/<name>"` and a `"typecheck": "tsc --noEmit"` script.
@@ -58,3 +73,4 @@ Turborepo manages `build`, `typecheck`, `test`, and `dev`:
 | `pnpm build`        | Run `turbo run build`                                                          |
 | `pnpm test`         | Run `turbo run test`                                                           |
 | `pnpm dev`          | Run `turbo run dev`                                                            |
+| `pnpm gen`          | Run `turbo gen` (`ts-package` or `py-package` generators)                      |

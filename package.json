@@ -6,6 +6,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "gen": "gen",
     "lint": "pnpm lint:ts && pnpm lint:py",
     "lint:ts": "oxlint",
     "lint:py": "uv run ruff check .",
@@ -19,6 +20,8 @@
     "test": "turbo run test"
   },
   "devDependencies": {
+    "@turbo/gen": "^2.11.13",
+    "@types/node": "^26.6.6",
     "oxfmt": "^0.79.0",
     "oxlint": "^1.94.0",
     "turbo": "^2.11.13",
