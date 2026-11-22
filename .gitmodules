@@ -1,0 +1,6 @@
+[submodule "vendor/JoyAI-Video-Edit"]
+	path = vendor/JoyAI-Video-Edit
+	url = https://github.com/nucleuseru/JoyAI-Video-Edit
+[submodule "vendor/seed-vc"]
+	path = vendor/seed-vc
+	url = https://github.com/nucleuseru/seed-vc.git

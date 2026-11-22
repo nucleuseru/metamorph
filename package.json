@@ -1,0 +1,28 @@
+{
+  "name": "metamorph",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Become anyone online in realtime. Live body swapping, voice cloning, and video editing across any platform.",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "pnpm lint:ts && pnpm lint:py",
+    "lint:ts": "oxlint",
+    "lint:py": "uv run ruff check .",
+    "format": "pnpm format:ts && pnpm format:py",
+    "format:ts": "oxfmt --write",
+    "format:py": "uv run ruff format .",
+    "format:check": "oxfmt --check && uv run ruff format --check .",
+    "typecheck": "pnpm typecheck:ts && pnpm typecheck:py",
+    "typecheck:ts": "turbo run typecheck",
+    "typecheck:py": "uv run ty check",
+    "test": "turbo run test"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.79.0",
+    "oxlint": "^1.94.0",
+    "turbo": "^2.11.13",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "pnpm@12.21.0"
+}

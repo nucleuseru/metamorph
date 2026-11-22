@@ -1,0 +1,36 @@
+[project]
+name = "metamorph"
+version = "0.0.0"
+description = "Become anyone online in realtime. Live body swapping, voice cloning, and video editing across any platform."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["ruff", "ty"]
+
+[tool.uv.workspace]
+members = ["apps/*-py", "packages/*-py"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["vendor"]
+
+[tool.ty.src]
+exclude = ["vendor"]
+
+[tool.ruff.lint]
+select = [
+  "E", # pycodestyle errors
+  "W", # pycodestyle warnings
+  "F", # pyflakes
+  "I", # isort
+  "UP", # pyupgrade
+  "B", # flake8-bugbear
+  "SIM", # flake8-simplify
+  "RUF", # ruff-specific rules
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
