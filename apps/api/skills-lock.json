@@ -1,0 +1,68 @@
+{
+  "version": 2,
+  "skills": {
+    "better-auth-best-practices": {
+      "source": "better-auth/skills",
+      "commit": "20c9e88a5c007461a703f1c213572b073196113e",
+      "sourceType": "github",
+      "skillPath": "better-auth/best-practices/SKILL.md",
+      "computedHash": "2773c3687f2cf96d659049ebf2d8c86058a33541b09360712df0dc6b1404c403"
+    },
+    "better-auth-security-best-practices": {
+      "source": "better-auth/skills",
+      "commit": "20c9e88a5c007461a703f1c213572b073196113e",
+      "sourceType": "github",
+      "skillPath": "security/SKILL.md",
+      "computedHash": "36e9710eaa13c61c00bec00a4902fdc6ed829e6de13127238ae57494e93c1d9d"
+    },
+    "effect-ts": {
+      "source": "Effect-TS/skills",
+      "commit": "155c50c911f9c99c294ef8a4461981c5bbe6453e",
+      "sourceType": "github",
+      "skillPath": "skills/effect-ts/SKILL.md",
+      "computedHash": "0e5d926566561f7fe206f5f60c1c53e21d1519fd6de8408a7e3c9934d55ad04f"
+    },
+    "email-and-password-best-practices": {
+      "source": "better-auth/skills",
+      "commit": "20c9e88a5c007461a703f1c213572b073196113e",
+      "sourceType": "github",
+      "skillPath": "better-auth/emailAndPassword/SKILL.md",
+      "computedHash": "407c1244202876daa748818ed41dc55afde1b3f7aec48ae3a1f1c8a7ee40465e"
+    },
+    "runpod-cost-audit": {
+      "source": "runpod/runpod-plugins-official",
+      "commit": "6c9bf684625ae857cc0d8fe43ae881e352508fb5",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/runpod-cost-audit/SKILL.md",
+      "computedHash": "1b54e0f476521817d46afd6b916cd813114abe28959f0d872d635a87e220878e"
+    },
+    "runpod-discovery": {
+      "source": "runpod/runpod-plugins-official",
+      "commit": "6c9bf684625ae857cc0d8fe43ae881e352508fb5",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/runpod-discovery/SKILL.md",
+      "computedHash": "86f985e3528deca92e091bda874e80d038d73485893b850bb41071ba9cd821df"
+    },
+    "runpod-pod-deploy": {
+      "source": "runpod/runpod-plugins-official",
+      "commit": "6c9bf684625ae857cc0d8fe43ae881e352508fb5",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/runpod-pod-deploy/SKILL.md",
+      "computedHash": "f0d21ccb91d876e7af7b2b76992301f13ba85260052dcd418e7010683dd515ea"
+    },
+    "runpod-pod-doctor": {
+      "source": "runpod/runpod-plugins-official",
+      "commit": "6c9bf684625ae857cc0d8fe43ae881e352508fb5",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/runpod-pod-doctor/SKILL.md",
+      "computedHash": "b66d05bf671ab212211a50cae1ee2504dab80bde145fb9c393300ccdabb78342"
+    },
+    "runpodctl": {
+      "source": "runpod/runpod-plugins-official",
+      "commit": "6c9bf684625ae857cc0d8fe43ae881e352508fb5",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/runpodctl/SKILL.md",
+      "computedHash": "f13caae090b0347ca921ad4bf510eed494bd202a7a72f0538899d3f6f62ff055"
+    }
+  }
+}

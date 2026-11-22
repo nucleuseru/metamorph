@@ -1,0 +1,301 @@
+---
+concepts: [runpodctl, registry-credential, endpoint-autoscaling]
+---
+
+# runpodctl — behavior reference
+
+**This file does not list flags.** `runpodctl <resource> <action> --help` does, it is always
+current, and it ships with the binary in front of you:
+
+```bash
+runpodctl --help                          # resources
+runpodctl <resource> --help               # actions + aliases
+runpodctl <resource> <action> --help      # exact flags, defaults, examples
+runpodctl help <resource> <action>        # same, and traverses aliases (`pod remove`) that --help does not
+runpodctl version                         # which surface you actually have
+```
+
+What lives here instead is the part `--help` never tells you: **what a flag means when it
+succeeds, what "ready" is defined as, which field to trust, and what a failure looks like.**
+Output shapes, error codes and env vars are in
+[output-and-errors.md](output-and-errors.md).
+
+> Two `--help` gotchas: cobra does **not** traverse aliases for `--help`, so `pod remove --help`
+> answers `unknown command` even though `pod remove <id>` works — use `runpodctl help pod remove`.
+> And the deprecated `get pod` / `get cloud` paths are hidden from `--help` but still live.
+
+## Pods
+
+### Waiting for readiness (`--wait`, v2.9.0+)
+
+| | detail |
+| --- | --- |
+| mode | `--wait-for ssh` (default) waits as described here; `--wait-for running` (v2.15.0+) waits only until the pod reports its container is up (desiredStatus RUNNING + runtime reported), needs no ssh or public port, and is the correct mode when container-up is enough or the image runs no sshd (typical for cpu pods). It proves nothing about ssh, so keep ssh mode when the task needs ssh — including a cpu image that starts its own sshd. Setting `--wait-for` implies `--wait` |
+| ready means | **in ssh mode:** the pod's **public port 22** accepts a tcp connection *and* answers with an ssh protocol banner. No key, no handshake — it proves sshd is up, not that your key is installed. Port 22 merely appearing in `runtime.ports` is not enough: prod allocates that port even for images that run no sshd. **In running mode:** the container is reported up, nothing about ssh |
+| timeout | `--wait-timeout` accepts `90s`, `10m`, `1h`, `2d`; default `10m` |
+| output | progress on **stderr** every ~15s; stdout stays exactly one json object, in the `pod get` shape (so it includes the live `ssh` block, unlike a plain create) |
+| on failure | the pod is **not** deleted — exit is non-zero, code `wait_timeout` (or `wait_interrupted` on ctrl-c), and the error object carries the pod id in `id` plus the delete command. A second ctrl-c always exits |
+| refuses | `--ssh=false` **in ssh mode** (there would be nothing to wait for); it is allowed with `--wait-for running`, which does not need ssh |
+| warns, still waits | **in ssh mode:** `--cloud-type COMMUNITY` (community cloud only maps a public ssh port on a machine that has a public ip, which the CLI cannot request) |
+
+### Pod status fields
+
+`pod get` and `pod list` report both (v2.9.0+):
+
+| field | meaning |
+| --- | --- |
+| `desiredStatus` | what the platform intends: `RUNNING`, `EXITED`. Says `RUNNING` while the image is still pulling |
+| `runtimeStatus` | what is actually happening: `running`, `initializing` (no container reported yet — pull/create/boot), `stopped`, `terminated`, `unknown` (the runtime lookup failed or was not made — **not** "the pod is down") |
+| `runtimeStatusReason` | stable token when there is more to say, e.g. `awaiting_container`, `stopped_by_user`, `stopped_by_runpod`, `terminated_outbid`, `runtime_unavailable` |
+| `uptimeSeconds` | present only while the container is up; omitted otherwise (it used to be a constant `0`) |
+| `lastStatusChange` | the backend's raw free-text note, carried so a phrasing the cli does not tokenise still reaches you |
+| `networkVolumeId` / `networkVolume` | **v2.10.0+:** `pod get --include-network-volume` fills both — the id and the full volume object. On **v2.9.0 and earlier both were dropped on deserialization** and read back `null` even with the flag, so a pre-v2.10.0 binary cannot tell you whether a pod has a volume. Upstream reports the `networkVolumeId` also comes back *without* the flag now (it is free alongside the pod), but only the flagged path is covered by a test — pass `--include-network-volume` rather than relying on that |
+
+`--status` filters **`desiredStatus` only** — `--status initializing` silently matches nothing.
+
+### Reading pod logs (`pod logs`, v2.10.0+)
+
+| | detail |
+| --- | --- |
+| output | **json lines**, one `{source,line,ts}` object per line — pipe straight to `jq`, no SSE frame parsing |
+| `--source` | `container` (your workload's stdout/stderr), `system` (the platform narrating image pull, container create, start), or `both` (default) |
+| termination | without `--follow` it replays history and **exits on its own** once lines stop arriving (`--max-wait`, default `5s`, bounds the wait). With `--follow` it streams until interrupted and reconnects itself if the connection drops |
+| history | `--tail 0-5000` (default 100; `0` = live only), or `--since 30m|2h|7d|<rfc3339>`, which overrides `--tail` |
+| what to read it for | a stalled deploy is a `system` story — repeated pull progress, or a `create container` that never reaches `start` |
+
+## Serverless (alias: sls)
+
+### Invoking an endpoint (`serverless run`, v2.9.0+)
+
+| | detail |
+| --- | --- |
+| payload | the **handler** payload, sent as `{"input": <your json>}`. Must be a json object; parsed and size-checked locally (the api's `/run` body limit is 10 MiB), so quoting mistakes and oversized bodies fail as `usage_error` before the upload |
+| `--input` vs `--input-file` | mutually exclusive; one is required. `-` reads stdin either way. A payload with its own top-level `input` key gets a warning — that is usually a whole curl envelope pasted in, which arrives double-wrapped |
+| stdout | always the job payload, including a `FAILED` job's `error`, and the last payload seen when the wait ran out. Printed byte-faithfully (handler keys are not renamed or re-typed) |
+| stderr | progress notes and the error object — never job data |
+| exit codes | `0` when `COMPLETED`, and when `--no-wait`/`--wait 0` submitted successfully. `1` on request failure, on wait-budget exhaustion (`timeout`), or on `FAILED`/`CANCELLED`/`TIMED_OUT` (`job_failed`) |
+| two budgets | `--wait` bounds the whole job; the shared `timeout` config key (30s) bounds one api call. A call inside a wait is clamped to what is left, never below 1s |
+| `/run`, never `/runsync` | `/runsync` is not synchronous: the connection is released after ~90s with the job still running, no job id exists until it answers (so a slow response strands a billed, unpollable job), and a `sync-` job's result expires after 1 minute vs 30 for `/run` |
+
+`serverless status <endpoint-id> <job-id>` polls a job submitted earlier; `serverless health
+<endpoint-id>` returns worker + job counts.
+
+### Reading worker logs (`serverless logs`, v2.10.0+)
+
+Same flags and semantics as `pod logs` above, plus:
+
+| | detail |
+| --- | --- |
+| output | `{source,line,ts,workerId}` — the extra `workerId` is what makes the no-`--worker` form usable |
+| `--worker` | optional. **Omit it and the command resolves the endpoint's workers itself** and reads all of them at once, tagging each line. With `--follow` it also picks up workers that appear mid-run, so an endpoint scaling up does not need the command re-run |
+| what to read it for | the crash loop: repeated `system` `start container` lines with **no** `container` output means the container exits before the handler runs, which leaves jobs sitting in the queue with nothing wrong with capacity |
+
+### Endpoint update and zero values
+
+**Version:** the v2 update and nullable idle-timeout behavior below requires
+**runpodctl v3.1.1+**. Check `runpodctl version`.
+
+`serverless update` applies only supplied worker settings. Zero worker limits are
+valid: `runpodctl serverless update <id> --workers-min 0` permits scale-to-zero,
+and `--workers-max 0` caps the endpoint at zero workers. Verify the result with
+`serverless get <id>`.
+
+`--scale-threshold 4` alone keeps the endpoint's scaling strategy, while
+`--scale-by requests` alone carries its current threshold into request-count scaling.
+The CLI reads v2 to preserve the setting you omitted. A fractional delay such as
+`0.5` cannot be a request count, so choose a positive integer explicitly:
+
+```bash
+runpodctl serverless update <id> --scale-by requests --scale-threshold 4
+```
+
+On a queue-based endpoint using request-count scaling, `serverless get`, `list` and
+`update` print `idleTimeout: null` in JSON and YAML. It means **not applicable**, not
+zero or a failed lookup. Do not backfill it from REST v1. For that combination,
+`--idle-timeout` returns an API validation error. Where applicable, its range is
+1 to 3600 seconds.
+
+Set the REST destination using
+[`RUNPOD_API_URL`](output-and-errors.md#environment-variables).
+
+To change an existing endpoint's GPU pool, send
+`PATCH https://api.runpod.io/v2/serverless/<id>` with `{"gpu":{"pools":[...]}}`.
+
+**Multi-DC** (`--network-volume-ids <v1>,<v2> --data-center-ids <dc1>,<dc2>`) needs
+**runpodctl ≥ v2.4.0**; data does not sync between volumes automatically — golden path
+[10](../../runpod/golden-paths/10-multi-region-ha-serverless.md).
+
+`serverless update --model-reference` includes the server-resolved `modelReferences` in
+JSON/YAML output; `--clear-models` returns `modelReferences: []`. Other updates do not fetch
+model references; use `serverless model-status <id>` to inspect them.
+
+### CPU endpoints and REST v1
+
+Verified evidence for why REST v1 must not be used for a CPU endpoint (the create
+instruction is in [SKILL.md](../SKILL.md)): 2026-07-14,
+`POST https://rest.runpod.io/v1/endpoints` with `"computeType":"CPU"` silently returned a GPU
+endpoint (`gpuCount:1`, `cpuFlavorIds:null`), while `runpodctl --compute-type CPU` correctly
+returned `computeType:"CPU"` with `instanceIds:["cpu3g-4-16"]`. The separate
+**runtime/invoke** API `https://api.runpod.ai/v2/<endpoint-id>/…`
+(health/run/runsync/openai) is a different v2 and works fine; the v1-vs-v2 caveat is only
+about the **control/management** REST.
+
+### Error codes worth branching on
+
+`timeout`, `job_failed`, `wait_timeout` and `wait_interrupted` are the codes these commands
+add, and `not_found` gains a nuance during a wait. They live with every other code in
+[output-and-errors.md](output-and-errors.md#codes) — including which are safe to retry, which
+mean work outlived the cli, and the `id` field that names a resource a failed wait left
+behind.
+
+## Models
+
+`model add` supports upload sessions, versioning, metadata, and private-source credentials.
+Concepts: [model-caching.md](model-caching.md); flags: `runpodctl model add --help`.
+
+## Registry credentials
+
+Prefer `registry create --password-stdin` (needs **v2.11.0+**) for scripts so the credential does not enter the
+process table or shell history. A secret already held in an environment variable can be piped
+without expanding its value into the runpodctl argument list:
+
+```bash
+printenv REGISTRY_TOKEN | runpodctl registry create --name "x" --username "u" --password-stdin
+```
+
+Redirecting a credential file to `--password-stdin` also works, including multi-line
+credentials such as a GCR service-account JSON key. The command strips one trailing line
+ending but preserves leading, inner, and other trailing whitespace.
+
+`--password` remains supported for compatibility, but places the credential in `argv`.
+When neither password flag is present and stdin is a terminal, runpodctl prompts without
+echo. With non-terminal stdin and no password source it returns `usage_error` instead of
+blocking; `--password` and `--password-stdin` are mutually exclusive.
+
+## SSH
+
+`ssh info <pod-id>` returns **connection details, not an interactive session** — and it has
+three output shapes, only one of which is an error. That table is in
+[output-and-errors.md](output-and-errors.md#parsing-ssh-info); read it before writing a
+readiness loop. If interactive SSH isn't available, execute remotely via
+`ssh user@host "command"`.
+
+`ssh remove-key` takes `--name` **or** `--fingerprint`; use the fingerprint to disambiguate
+keys that share a name.
+
+### Pod host key trust (v2.15.0+)
+
+In **v2.14.0 and earlier**, the deprecated `project` and `exec python` SSH paths
+run with **host key checking disabled**. Check `runpodctl version` before relying
+on host key pinning.
+
+Pinning applies to the **hidden, deprecated** `exec python` command's Go SSH client
+in **v2.15.0+**, and to legacy `project` SSH in **v2.15.0 through v3.0.1**.
+In builds containing the unreleased [runpod/runpodctl#382](https://github.com/runpod/runpodctl/pull/382),
+`project` only emits the [SDK notice](output-and-errors.md#project-runpod-sdk-notice)
+and opens no SSH connection. Use the [Runpod SDK](https://github.com/runpod/runpod-python)
+for serverless development regardless of CLI version; these are compatibility and
+security caveats, not a recommendation to use `project`.
+
+`ssh info` prints an ordinary
+`ssh -i <key> root@<ip> -p <port>` and leaves verification to OpenSSH's defaults against your
+own `~/.ssh/known_hosts`.
+
+The Go client pins a pod's host key in `~/.runpod/ssh/known_hosts`, keyed by `runpod-<podID>`
+rather than by address, because Runpod recycles pod SSH addresses. The Go client enrolls the
+key on first contact, printing the fingerprint to **stderr**, and refuses a key that does not
+match an existing entry. The `rsync` invocation always runs after that, so it **requires** the
+pin rather than creating one: `StrictHostKeyChecking=yes` with `UpdateHostKeys=no`, so it can
+neither enroll a key itself nor let the server add further keys to the entry.
+
+A mismatch means either the pod's container was recreated and so generated a new host key, or
+the connection is being intercepted. A recreated container is the common case: stopping and
+starting a pod clears its container disk, as do `pod update` and a reset, and Runpod's images
+generate fresh host keys at boot. The pod id stays the same, so the pin does not survive a stop
+and start.
+
+When stdin and stderr are both terminals, the Go client shows the recorded and offered
+fingerprints and asks `[y/N]` before replacing that pod's entry. Without a terminal (an agent,
+a script, CI) it fails with the offered fingerprint and names `runpodctl ssh forget <pod-id>`,
+which removes only that pod's entry so the next connection enrolls the key the pod then offers.
+**Never run `ssh forget` unprompted**: clearing the entry destroys the only signal that separates
+a restart from interception. Surface the fingerprint and ask whether the pod was stopped,
+updated, or reset since the last connection. Once the operator confirms one of those,
+`ssh forget` and a retry is the recovery. If none happened, treat it as possible interception.
+
+For about 30 seconds after `pod start`, the API still reports the previous container's address.
+A connection in that window can be refused, reset, end its handshake with `EOF`, or drop
+mid-`rsync`; the CLI reports these as `could not reach pod <id>: it may still be restarting`.
+That is not a trust failure. Wait and retry.
+
+Trust on first use closes silent key substitution on **later** connections. It does **not**
+prevent interception of the **first** connection to a pod; that needs the host key delivered
+over an authenticated Runpod channel, which is separate and unstarted work.
+
+## File Transfer
+
+`send`/`receive` do encrypted, incremental, compressed transfer — don't pre-tar or
+pre-compress the source. **Agent flow (one side sends, the other receives):**
+
+1. Run `send <path>` **without** a code. The **first line of stdout is the one-time code**;
+   `send` then blocks until the receiver connects — so capture that first line as it streams
+   (background the process, tee to a log) rather than waiting for exit.
+2. On the other machine (use `runpodctl ssh` into the pod/host if needed) run `receive <code>`
+   with that exact code — positional, there is no `--code` flag. Each `send` mints a **fresh**
+   code — never reuse or invent one.
+3. Both processes must exit `0`. On failure, re-run `send` and use its **new** first-line code.
+
+To push local files to a pod: get `ssh info <pod-id>`, start `send` locally (capture the
+code), then `ssh` to the pod and run `receive <code>` there. For large/library-style data, a
+network volume is often simpler than `send`/`receive`.
+
+### Network volume upload and download (v3.1.0+)
+
+`network-volume upload <volume-id> <local-path> [remote-path]` and
+`network-volume download <volume-id> <remote-path> [local-path]` move a file or a folder
+through the volume's S3 API, with no pod running. `"/"` downloads the whole volume.
+
+- **Keys:** S3 API keys, separate from the API key: `RUNPOD_S3_ACCESS_KEY` /
+  `RUNPOD_S3_SECRET_KEY`, `--s3-access-key` / `--s3-secret-key`, or `s3AccessKey` /
+  `s3SecretKey` in `~/.runpod/config.toml`. They are created in the console (Settings > S3
+  API Keys); missing keys are `no_credentials`. The API key looks up the volume's data
+  center unless `--data-center-id` is passed; a data center without the
+  [S3 API](https://docs.runpod.io/storage/s3-api) is `usage_error`.
+- **Resume:** on `transfer_incomplete`, run the same command again. Files whose
+  destination has the same size and is not older are skipped. Files over 64 MB upload as
+  multipart, and a rerun reuses every part whose MD5 matches the local bytes. Files over
+  64 MB download in chunks into `<name>.rpdownload` (finished chunks listed in
+  `<name>.rpdownload.json`), and the file appears under its real name only once complete.
+- **`--force`** sends every file, for a same-size edit that kept an older mtime (`cp -p`,
+  `rsync -a`, `tar x`), which the skip rule would pass over.
+- **Retries:** 429, 5xx (including 524) and dropped connections are retried inside the
+  command; `transfer_incomplete` means those ran out. `volume_full`: grow the volume with
+  `network-volume update --size`, then rerun. Parts of an upload that is never rerun stay
+  in the volume's hidden `.s3compat_uploads/` folder and count toward its size.
+- **Prefer it over `send`/`receive`** for anything big that should land on a volume. For
+  other S3 tools against the same API, see `runpod-companion-clis` (`aws`).
+
+## Hub, templates, volumes, registry, info, utilities
+
+Plain CRUD plus filters — `--help` is complete and this file would only go stale restating it:
+
+```bash
+runpodctl hub --help              # list/search/get; --type, --category, --owner, --order-by
+runpodctl template --help         # list/search/get/create/update/delete; --type official|community|user
+runpodctl network-volume --help   # list/get/create/update/delete
+runpodctl registry --help         # list/get/create/delete
+runpodctl gpu list --help         # + $/hr per cloud and dataCenterAvailability[]
+runpodctl datacenter list --help  # alias: dc
+runpodctl billing --help          # pods / serverless / network-volume
+runpodctl user --help             # account + balance (alias: me)
+runpodctl doctor                  # interactive: diagnose and fix cli issues
+runpodctl completion              # auto-detect shell and install completion
+```
+
+Which of these to reach for, and the traps that are not flags (Hub worker selection, CPU
+endpoints, template-vs-image, cost guards) are in the [SKILL.md](../SKILL.md) decision rules.
+
+## Exact rules
+
+See [runpodctl](../../runpod-usage/concepts/runpodctl.yaml) and
+[endpoint autoscaling](../../runpod-usage/concepts/endpoint-autoscaling.yaml).

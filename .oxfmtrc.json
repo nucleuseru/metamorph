@@ -5,8 +5,12 @@
     "dist/**",
     "build/**",
     ".turbo/**",
+    ".next/**",
+    "apps/web/.next/**",
     "node_modules/**",
     "vendor/**",
+    ".agents/**",
+    "**/.agents/**",
     "pnpm-lock.yaml",
     "uv.lock",
     "**/*.hbs"
