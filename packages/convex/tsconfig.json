@@ -1,7 +1,0 @@
-{
-  "extends": "@repo/tsconfig",
-  "compilerOptions": {
-    "types": ["node"]
-  },
-  "include": ["src"]
-}
