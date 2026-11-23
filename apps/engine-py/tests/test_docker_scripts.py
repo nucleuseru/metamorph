@@ -201,6 +201,9 @@ def test_github_workflow_builds_and_deploys_all_targets() -> None:
         docker_content
     )
     for expected in (
+        "FROM ghcr.io/astral-sh/uv:0.12 AS uv-bin",
+        "--index-strategy unsafe-best-match",
+        '"setuptools<82"',
         "librosa>=0.11.0",
         "numpy==2.2.6",
         "pillow==12.2.0",

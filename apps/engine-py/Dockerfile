@@ -7,7 +7,7 @@
 # Always build with the repository root as build context:
 #   docker build -f apps/engine-py/Dockerfile --target full -t metamorph-engine:full .
 
-FROM ghcr.io/astral-sh/uv:0.7 AS uv-bin
+FROM ghcr.io/astral-sh/uv:0.12 AS uv-bin
 
 # ==============================================================================
 # Stage 1: Lightweight CPU mock backend
@@ -79,6 +79,7 @@ COPY apps/engine-py/src ./apps/engine-py/src
 RUN uv sync --frozen --no-dev --package metamorph-engine \
     && uv pip install --python /app/.venv/bin/python --no-cache \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
+        --index-strategy unsafe-best-match \
         torch==2.9.1+cu128 \
         torchaudio==2.9.1+cu128 \
         av==13.1.0 \
@@ -160,6 +161,7 @@ COPY apps/engine-py/src ./apps/engine-py/src
 RUN uv sync --frozen --no-dev --package metamorph-engine \
     && uv pip install --python /app/.venv/bin/python --no-cache \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
+        --index-strategy unsafe-best-match \
         torch==2.9.1+cu128 \
         torchvision==0.24.1+cu128 \
         torchaudio==2.9.1+cu128 \
@@ -181,12 +183,9 @@ RUN uv sync --frozen --no-dev --package metamorph-engine \
         soundfile>=0.12.1 \
         "silero-vad>=5.1.2" \
         "librosa>=0.11.0" \
-        kernels==0.17.2 \
-        defuser==0.0.18 \
-        torchao==0.16.0 \
         ninja==1.13.0 \
         packaging \
-        setuptools \
+        "setuptools<82" \
         wheel
 
 COPY vendor/JoyAI-Video-Edit/deploy/joyomni_ops /tmp/joyomni_ops
@@ -233,7 +232,14 @@ RUN if [ "${INSTALL_FA4}" = "1" ]; then \
 
 # Optional local Qwen3.6-27B GPTQ prompt enhancement wheel
 RUN if [ -n "${GPTQMODEL_WHEEL_URL}" ]; then \
-        uv pip install --python /app/.venv/bin/python --no-cache \
+        apt-get update && apt-get install -y --no-install-recommends libpcre2-dev \
+        && rm -rf /var/lib/apt/lists/* \
+        && uv pip install --python /app/.venv/bin/python --no-cache \
+            --extra-index-url https://download.pytorch.org/whl/cu128 \
+            --index-strategy unsafe-best-match \
+            kernels==0.17.2 \
+            defuser==0.0.18 \
+            torchao==0.16.0 \
             device-smi==0.5.2 \
             logbar==0.4.1 \
             tokenicer==0.0.12 \
