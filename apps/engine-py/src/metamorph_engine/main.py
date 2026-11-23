@@ -1,100 +1,138 @@
 """FastAPI + uvloop entrypoint for metamorph-engine."""
 
-from collections.abc import AsyncGenerator
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
+import httpx
 import uvicorn
-from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from metamorph_engine.config import get_settings
+from metamorph_engine.assets import AssetLoader
+from metamorph_engine.auth import JWTAuthenticator
+from metamorph_engine.config import EngineSettings, get_settings
+from metamorph_engine.lifecycle import InstanceLifecycleManager
+from metamorph_engine.routes import session_router, system_router, ws_router
+from metamorph_engine.session import EngineSessionManager
 
-
-class EngineState:
-    """Tracks model readiness and warm state across the pod lifecycle."""
-
-    ready: bool = False
-
-
-state = EngineState()
-
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-    """Load and warm up inference pipelines before serving traffic."""
-    settings = get_settings()
-    if settings.warmup_on_startup:
-        # TODO: Initialize and warm up seed-vc & JoyAI-Video-Edit pipelines.
-        pass
-    state.ready = True
-    try:
-        yield
-    finally:
-        state.ready = False
+logger = logging.getLogger("metamorph_engine.main")
 
 
-app = FastAPI(
-    title="metamorph-engine",
-    lifespan=lifespan,
-    docs_url=None,
-    redoc_url=None,
-)
+def create_app(
+    settings: EngineSettings | None = None,
+    *,
+    shutdown_callback: Callable[[], None] | None = None,
+    webhook_transport: httpx.AsyncBaseTransport | None = None,
+    asset_transport: httpx.AsyncBaseTransport | None = None,
+) -> FastAPI:
+    """Create and wire a configured FastAPI inference application."""
+    cfg = settings or get_settings()
+    authenticator = JWTAuthenticator(cfg)
+    asset_loader = AssetLoader(cfg, http_transport=asset_transport)
+    session_manager = EngineSessionManager(cfg, asset_loader)
+    lifecycle = InstanceLifecycleManager(
+        cfg,
+        shutdown_callback=shutdown_callback,
+        webhook_transport=webhook_transport,
+        on_teardown=session_manager.shutdown_pipelines,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+        """Load enabled pipelines, optionally bootstrap assets, and mark instance ready."""
+
+        async def _boot_sequence() -> None:
+            await session_manager.load_and_warmup()
+            await session_manager.bootstrap_assets()
+            await lifecycle.mark_ready()
+
+        startup_task: asyncio.Task[None] | None = None
+        if cfg.use_async_startup:
+
+            async def _run_async_boot() -> None:
+                try:
+                    await _boot_sequence()
+                except asyncio.CancelledError:
+                    return
+                except Exception as exc:
+                    logger.exception("Async startup warmup failed: %s", exc)
+                    await lifecycle.mark_startup_failed(str(exc))
+
+            startup_task = asyncio.create_task(_run_async_boot(), name="engine-startup-warmup")
+        else:
+            await _boot_sequence()
+
+        try:
+            yield
+        finally:
+            if startup_task is not None and not startup_task.done():
+                startup_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await startup_task
+            await lifecycle.cancel_timers()
+            await session_manager.shutdown_pipelines()
+
+    application = FastAPI(
+        title="metamorph-engine",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+    )
+    application.state.settings = cfg
+    application.state.authenticator = authenticator
+    application.state.asset_loader = asset_loader
+    application.state.session_manager = session_manager
+    application.state.lifecycle = lifecycle
+
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=cfg.cors_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    application.include_router(system_router)
+    application.include_router(session_router)
+    application.include_router(ws_router)
+    return application
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    """Liveness probe for RunPod and load balancers."""
-    return {"status": "ok"}
-
-
-@app.get("/ready")
-async def ready(response: Response) -> dict[str, str]:
-    """Readiness probe; returns 503 until models are loaded and warmed up."""
-    if not state.ready:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "warming"}
-    return {"status": "ready"}
-
-
-@app.websocket("/ws/voice")
-async def voice_stream(websocket: WebSocket) -> None:
-    """Binary WebSocket stream for real-time voice cloning (seed-vc)."""
-    await websocket.accept()
-    try:
-        while True:
-            chunk = await websocket.receive_bytes()
-            # TODO: Route PCM audio chunk through seed-vc streaming pipeline.
-            await websocket.send_bytes(chunk)
-    except WebSocketDisconnect:
-        pass
-
-
-@app.websocket("/ws/video")
-async def video_stream(websocket: WebSocket) -> None:
-    """Binary WebSocket stream for real-time body swap / video editing (JoyAI-Video-Edit)."""
-    await websocket.accept()
-    try:
-        while True:
-            frame = await websocket.receive_bytes()
-            # TODO: Route video frame through JoyAI-Video-Edit streaming pipeline.
-            await websocket.send_bytes(frame)
-    except WebSocketDisconnect:
-        pass
+app = create_app()
 
 
 def run() -> None:
-    """Launch uvicorn with uvloop and httptools for minimal overhead."""
+    """Launch uvicorn with uvloop and httptools wired to lifecycle exit."""
     settings = get_settings()
-    uvicorn.run(
-        "metamorph_engine.main:app",
+    server_holder: dict[str, uvicorn.Server] = {}
+
+    def _trigger_exit() -> None:
+        srv = server_holder.get("server")
+        if srv is not None:
+            srv.should_exit = True
+
+    application = create_app(settings, shutdown_callback=_trigger_exit)
+    config = uvicorn.Config(
+        application,
         host=settings.host,
         port=settings.port,
         workers=settings.workers,
         loop="uvloop",
         http="httptools",
         ws="websockets",
+        ws_max_size=settings.ws_max_size_bytes,
+        ws_per_message_deflate=False,
         access_log=settings.access_log,
         log_level=settings.log_level,
     )
+    server = uvicorn.Server(config)
+    server_holder["server"] = server
+    server.run()
 
 
 if __name__ == "__main__":

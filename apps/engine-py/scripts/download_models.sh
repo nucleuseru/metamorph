@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEST="${JOYOMNI_CKPT_ROOT:-${MODEL_VOLUME_DIR:-/models}/checkpoints}"
+WANT_VOICE=0
+WANT_VIDEO=0
+WANT_PE=0
+WANT_DETECTORS=0
+FORCE=0
+DRY_RUN=0
+
+usage() {
+    cat <<'EOF'
+Usage: download_models.sh [options]
+
+Download Seed-VC and JoyAI-Video-Edit checkpoints into a model volume directory.
+
+Options:
+  --dest <dir>      Checkpoint root (default: $MODEL_VOLUME_DIR/checkpoints or /models/checkpoints)
+  --voice           Download Seed-VC v1 real-time checkpoints (XLSR, DiT, HiFT)
+  --video           Download JoyAI-Video-Edit DiT, xVAE, and MiMo-VL weights
+  --pe              Download local Qwen3.6-27B GPTQ INT4 Prompt Enhancement weights
+  --detectors       Download YuNet face detector + export YOLOv8n (320x320) person detector ONNX
+  --all             Download voice, video, PE, and detectors
+  --force           Re-download even if destination files already exist
+  --dry-run         Print download actions without executing
+  -h, --help        Show this help
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --dest) DEST="$2"; shift 2 ;;
+        --voice) WANT_VOICE=1; shift ;;
+        --video) WANT_VIDEO=1; shift ;;
+        --pe) WANT_PE=1; shift ;;
+        --detectors) WANT_DETECTORS=1; shift ;;
+        --all) WANT_VOICE=1; WANT_VIDEO=1; WANT_PE=1; WANT_DETECTORS=1; shift ;;
+        --force) FORCE=1; shift ;;
+        --dry-run) DRY_RUN=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if [ "$WANT_VOICE" = "0" ] && [ "$WANT_VIDEO" = "0" ] && [ "$WANT_PE" = "0" ] && [ "$WANT_DETECTORS" = "0" ]; then
+    WANT_VOICE=1
+    WANT_VIDEO=1
+fi
+
+run_or_echo() {
+    if [ "$DRY_RUN" = "1" ]; then
+        printf '[dry-run] %s\n' "$*"
+    else
+        "$@"
+    fi
+}
+
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ]; then
+    if [ -x /app/.venv/bin/python ]; then
+        PYTHON_BIN="/app/.venv/bin/python"
+    elif command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN="python3"
+    else
+        PYTHON_BIN="python"
+    fi
+fi
+
+hf_download_file() {
+    local repo="$1"
+    local filename="$2"
+    local cache_dir="$3"
+    run_or_echo "$PYTHON_BIN" -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(repo_id='$repo', filename='$filename', cache_dir='$cache_dir')
+"
+}
+
+hf_download_repo() {
+    local repo="$1"
+    local local_dir="$2"
+    local revision="${3:-}"
+    local include_json="${4:-}"
+    run_or_echo "$PYTHON_BIN" -c "
+import json
+from huggingface_hub import snapshot_download
+kw = {'repo_id': '$repo', 'local_dir': '$local_dir'}
+rev = '$revision'
+if rev:
+    kw['revision'] = rev
+inc = '''$include_json'''
+if inc:
+    kw['allow_patterns'] = json.loads(inc)
+snapshot_download(**kw)
+"
+}
+
+if [ "$DRY_RUN" = "0" ]; then
+    mkdir -p "$DEST"
+fi
+
+if [ "$WANT_VOICE" = "1" ]; then
+    SEEDVC_CACHE="${ENGINE_VOICE_CACHE_DIR:-$DEST/seed-vc}"
+    echo "[download_models] Preparing Seed-VC checkpoints in $SEEDVC_CACHE"
+    if [ "$DRY_RUN" = "0" ]; then
+        mkdir -p "$SEEDVC_CACHE"
+    fi
+    hf_download_file "Plachta/Seed-VC" "DiT_uvit_tat_xlsr_ema.pth" "$SEEDVC_CACHE"
+    hf_download_file "FunAudioLLM/CosyVoice-300M" "hift.pt" "$SEEDVC_CACHE"
+    hf_download_file "funasr/campplus" "campplus_cn_common.bin" "$SEEDVC_CACHE"
+    # Pre-cache XLSR feature extractor and encoder weights in HF_HOME
+    run_or_echo "$PYTHON_BIN" -c "
+from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model
+Wav2Vec2FeatureExtractor.from_pretrained('facebook/wav2vec2-xls-r-300m')
+Wav2Vec2Model.from_pretrained('facebook/wav2vec2-xls-r-300m')
+"
+fi
+
+if [ "$WANT_VIDEO" = "1" ]; then
+    JOYAI_DIR="$DEST/JoyAI-Video-Edit"
+    MIMO_DIR="$DEST/MiMo-VL-7B-RL-2508"
+    if [ "$FORCE" = "1" ] || [ ! -f "$JOYAI_DIR/dit/joyai_video_edit_dit_1101_face++.pth" ] || [ ! -f "$JOYAI_DIR/vae/diffusion_pytorch_model.safetensors" ]; then
+        echo "[download_models] Downloading JoyAI-Video-Edit DiT + xVAE -> $JOYAI_DIR"
+        hf_download_repo "jdopensource/JoyAI-Video-Edit" "$JOYAI_DIR" "" '["dit/joyai_video_edit_dit_1101_face++.pth", "vae/*"]'
+    else
+        echo "[download_models] JoyAI DiT + xVAE already present at $JOYAI_DIR"
+    fi
+
+    if [ "$FORCE" = "1" ] || [ ! -d "$MIMO_DIR" ] || [ -z "$(ls -A "$MIMO_DIR" 2>/dev/null || true)" ]; then
+        echo "[download_models] Downloading MiMo-VL-7B-RL-2508 -> $MIMO_DIR"
+        hf_download_repo "XiaomiMiMo/MiMo-VL-7B-RL-2508" "$MIMO_DIR"
+    else
+        echo "[download_models] MiMo-VL already present at $MIMO_DIR"
+    fi
+fi
+
+if [ "$WANT_PE" = "1" ]; then
+    PE_DIR="$DEST/Qwen3.6-27B-GPTQ-Int4-FOEM"
+    if [ "$FORCE" = "1" ] || [ ! -d "$PE_DIR" ] || [ -z "$(ls -A "$PE_DIR" 2>/dev/null || true)" ]; then
+        echo "[download_models] Downloading Qwen3.6-27B GPTQ INT4 PE -> $PE_DIR"
+        hf_download_repo "btbtyler09/Qwen3.6-27B-GPTQ-4bit" "$PE_DIR" "bcfe8a7ec20eec6ce67ded4669819ae77e73af3a"
+    else
+        echo "[download_models] Qwen PE already present at $PE_DIR"
+    fi
+fi
+
+if [ "$WANT_DETECTORS" = "1" ]; then
+    YUNET_PATH="$DEST/face_detection_yunet_2023mar.onnx"
+    if [ "$FORCE" = "1" ] || [ ! -f "$YUNET_PATH" ]; then
+        echo "[download_models] Downloading YuNet face detector -> $YUNET_PATH"
+        run_or_echo curl -fsSL -o "$YUNET_PATH" \
+            "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+    else
+        echo "[download_models] YuNet already present at $YUNET_PATH"
+    fi
+
+    YOLO_PATH="$DEST/yolov8n.onnx"
+    if [ "$FORCE" = "1" ] || [ ! -f "$YOLO_PATH" ]; then
+        echo "[download_models] Exporting YOLOv8n (imgsz=320, opset=12) -> $YOLO_PATH"
+        export_cmd="tmpdir=\"\$(mktemp -d)\" && trap 'rm -rf \"\$tmpdir\"' EXIT && uv venv \"\$tmpdir/venv\" && uv pip install --python \"\$tmpdir/venv/bin/python\" --no-cache --extra-index-url https://download.pytorch.org/whl/cpu torch torchvision ultralytics onnx onnxslim && { uv pip uninstall --python \"\$tmpdir/venv/bin/python\" opencv-python || true; } && uv pip install --python \"\$tmpdir/venv/bin/python\" --no-cache opencv-python-headless && (cd \"\$tmpdir\" && \"\$tmpdir/venv/bin/python\" -c \"from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx', imgsz=320, opset=12)\") && mv \"\$tmpdir/yolov8n.onnx\" \"$YOLO_PATH\""
+        run_or_echo bash -c "$export_cmd"
+    else
+        echo "[download_models] YOLOv8n already present at $YOLO_PATH"
+    fi
+fi
+
+echo "[download_models] Done."

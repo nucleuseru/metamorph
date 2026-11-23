@@ -63,6 +63,13 @@
       "sourceType": "github",
       "skillPath": "plugins/runpod/skills/runpodctl/SKILL.md",
       "computedHash": "f13caae090b0347ca921ad4bf510eed494bd202a7a72f0538899d3f6f62ff055"
+    },
+    "vastai": {
+      "source": "vast-ai/vast-cli",
+      "commit": "fa85015e91ff2e36acd9e07703ef8e083a5f451d",
+      "sourceType": "github",
+      "skillPath": "vastai/SKILL.md",
+      "computedHash": "00da0dc74a9c43ebf0a895669a49fc437acfd1b5b3d96d7d17277c9e8f7b4ef5"
     }
   }
 }

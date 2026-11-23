@@ -1,0 +1,48 @@
+# Git & tooling
+.git
+.github
+.gitignore
+.gitmodules
+.turbo
+.venv
+.ruff_cache
+.pytest_cache
+.DS_Store
+
+# JS/TS workspaces not needed inside engine-py image
+node_modules
+pnpm-lock.yaml
+pnpm-workspace.yaml
+package.json
+tsconfig.base.json
+.oxfmtrc.json
+.oxlintrc.json
+turbo
+apps/web
+apps/api
+packages/shared-ts
+docs
+
+# Python caches, test files, and local env files
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.env
+**/.env.*
+apps/engine-py/tests
+apps/engine-py/models
+**/.agents
+**/skills-lock.json
+
+# Runtime weights, caches, and non-runtime submodule assets belong outside images
+vendor/JoyAI-Video-Edit/assets
+vendor/JoyAI-Video-Edit/training
+vendor/JoyAI-Video-Edit/deploy/joyomni_ops/tests
+vendor/JoyAI-Video-Edit/deploy/deps
+vendor/JoyAI-Video-Edit/deploy/recordings
+vendor/JoyAI-Video-Edit/deploy/tmp
+vendor/seed-vc/assets
+vendor/seed-vc/examples
+vendor/seed-vc/baselines
+vendor/seed-vc/data
+vendor/seed-vc/checkpoints

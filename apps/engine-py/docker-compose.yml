@@ -1,0 +1,81 @@
+services:
+  engine-mock:
+    build:
+      context: ../..
+      dockerfile: apps/engine-py/Dockerfile
+      target: mock
+    image: metamorph-engine:mock
+    ports:
+      - "${ENGINE_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENGINE_BACKEND: mock
+      ENGINE_HOST: 0.0.0.0
+      ENGINE_PORT: "8000"
+      ENGINE_INSTANCE_ID: ${ENGINE_INSTANCE_ID:-local-instance}
+      ENGINE_USER_ID: ${ENGINE_USER_ID:-user-local}
+      ENGINE_ENABLE_VOICE: ${ENGINE_ENABLE_VOICE:-true}
+      ENGINE_ENABLE_VIDEO: ${ENGINE_ENABLE_VIDEO:-true}
+      ENGINE_JWT_PUBLIC_KEY: ${ENGINE_JWT_PUBLIC_KEY:-}
+      ENGINE_LIFECYCLE_WEBHOOK_URL: ${ENGINE_LIFECYCLE_WEBHOOK_URL:-}
+      ENGINE_LIFECYCLE_WEBHOOK_SECRET: ${ENGINE_LIFECYCLE_WEBHOOK_SECRET:-}
+      ENGINE_DISCONNECT_TIMEOUT_S: ${ENGINE_DISCONNECT_TIMEOUT_S:-30}
+      ENGINE_STARTUP_IDLE_TIMEOUT_S: ${ENGINE_STARTUP_IDLE_TIMEOUT_S:-120}
+
+  engine-gpu:
+    profiles: ["gpu"]
+    build:
+      context: ../..
+      dockerfile: apps/engine-py/Dockerfile
+      target: full
+    image: metamorph-engine:full
+    ports:
+      - "${ENGINE_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENGINE_BACKEND: gpu
+      ENGINE_HOST: 0.0.0.0
+      ENGINE_PORT: "8000"
+      MODEL_VOLUME_DIR: /models
+    volumes:
+      - "${MODEL_VOLUME_HOST_DIR:-./models}:/models"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  engine-voice:
+    profiles: ["voice"]
+    build:
+      context: ../..
+      dockerfile: apps/engine-py/Dockerfile
+      target: voice
+    image: metamorph-engine:voice
+    ports:
+      - "${ENGINE_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENGINE_BACKEND: gpu
+      ENGINE_HOST: 0.0.0.0
+      ENGINE_PORT: "8000"
+      ENGINE_ENABLE_VOICE: "true"
+      ENGINE_ENABLE_VIDEO: "false"
+      MODEL_VOLUME_DIR: /models
+    volumes:
+      - "${MODEL_VOLUME_HOST_DIR:-./models}:/models"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

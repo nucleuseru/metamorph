@@ -1,54 +1,179 @@
 # Inference Engine (`apps/engine-py`)
 
-`metamorph-engine` (`apps/engine-py`) is the low-latency Python GPU inference server deployed to RunPod pods. It hosts:
+`metamorph-engine` (`apps/engine-py`) is the low-latency single-user Python GPU inference server deployed to dedicated GPU instances. It hosts:
 
-- **Real-time voice cloning** (backed by `vendor/seed-vc`)
-- **Full-body swap & video editing** (backed by `vendor/JoyAI-Video-Edit`)
+- **Real-time voice cloning** (`vendor/seed-vc` v1 real-time model + SOLA crossfade + RMS/FSMN VAD)
+- **Full-body swap & RV2V / V2V video editing** (`vendor/JoyAI-Video-Edit` streaming DiT + xVAE pipeline)
+- **Adaptive A/V synchronization** aligning voice and video emission using microsecond capture PTS
 
 ## Stack
 
-- **Framework & Server**: FastAPI + `uvicorn` with `uvloop`, `httptools`, and `websockets`
-- **Configuration**: `pydantic-settings` (`EngineSettings` in `src/metamorph_engine/config.py`)
+- **Framework & Server**: FastAPI + `uvicorn` (`uvloop`, `httptools`, `websockets`)
+- **Configuration**: `pydantic-settings` (`EngineSettings` in [`config.py`](../apps/engine-py/src/metamorph_engine/config.py))
+- **Authentication**: Asymmetric **EdDSA (Ed25519)** JWT verification (`JWTAuthenticator` in [`auth.py`](../apps/engine-py/src/metamorph_engine/auth.py))
 - **Workspace Dependencies**: `metamorph-shared` (`packages/shared-py`)
 
 ## Endpoints
 
-- `GET /health` — Liveness probe returning `{"status": "ok"}`
-- `GET /ready` — Readiness probe returning `503` `{"status": "warming"}` until startup warmup completes, then `{"status": "ready"}`
-- `WS /ws/voice` — Binary WebSocket stream for real-time voice cloning (`seed-vc`)
-- `WS /ws/video` — Binary WebSocket stream for real-time body swap / video editing (`JoyAI-Video-Edit`)
+### Public Probes
 
-## Configuration
+- `GET /health` — Liveness probe returning `{"status": "ok", "instance_id", "backend", "enabled_modalities"}`.
+- `GET /ready` — Readiness probe returning `503` (`warming` or `shutting_down`) until startup warmup completes, then `200` (`ready`).
 
-Environment variables use the `ENGINE_` prefix (and optional `.env` file):
+### Authenticated HTTP Control (`/session`, `Authorization: Bearer <jwt>`)
 
-| Variable                   | Default    | Description                         |
-| :------------------------- | :--------- | :---------------------------------- |
-| `ENGINE_HOST`              | `0.0.0.0`  | Server bind host                    |
-| `ENGINE_PORT`              | `8000`     | Server listen port                  |
-| `ENGINE_WORKERS`           | `1`        | Uvicorn worker count                |
-| `ENGINE_ACCESS_LOG`        | `false`    | Enable HTTP access logging          |
-| `ENGINE_LOG_LEVEL`         | `info`     | Uvicorn log level                   |
-| `ENGINE_DEVICE`            | `cuda`     | Target inference device             |
-| `ENGINE_DTYPE`             | `bfloat16` | Inference tensor dtype              |
-| `ENGINE_WARMUP_ON_STARTUP` | `true`     | Preload/warmup models in `lifespan` |
+- `GET /session/status` — Instance lifecycle state, remaining idle/disconnect countdowns, staged reference assets, and live A/V sync telemetry.
+- `POST /session/config` — Update prompt, `ref_image_url` / `ref_image_base64` / `clear_ref_image`, `ref_audio_url` / `ref_audio_base64`, and video/audio overrides; hot-swaps active WebSocket streams without instance reprovisioning.
+- `POST /session/assets` — Multipart `form-data` upload for `prompt`, `ref_image`, and/or `ref_audio` with hot-swap support.
+- `POST /session/shutdown` — Trigger immediate graceful teardown and signed lifecycle webhook delivery.
 
-## Speed-First Guidelines
+### Multiplexed Binary WebSocket (`WS /ws/session`)
 
-1. **Zero-copy / binary media transport**: Use binary WebSocket frames (`bytes` / `memoryview`) for audio PCM chunks and video frames. Never base64-encode or JSON-wrap media payloads on the hot path.
-2. **Never block the event loop**: Offload CPU-bound pre/post-processing and synchronous CUDA calls to dedicated threads/executors or CUDA streams so WebSocket heartbeats and concurrent streams stay responsive.
-3. **GPU inference defaults**:
-   - Preload weights and run warmup passes during FastAPI `lifespan` startup before marking `/ready` healthy.
-   - Wrap inference in `torch.inference_mode()` with `bfloat16`/`float16` autocast where supported.
-   - Reuse pre-allocated pinned host buffers and GPU tensors; avoid per-frame allocations.
-4. **Vendor boundaries**: Import or wrap `vendor/JoyAI-Video-Edit` and `vendor/seed-vc` from `apps/engine-py` without modifying `vendor/` directly (see [submodules.md](submodules.md)).
+Single multiplexed WebSocket connection carrying both JSON control messages and binary media frames.
+
+#### Authentication Handshake
+
+- **Browser / default**: Connect to `WS /ws/session` and send `{"type": "auth", "token": "<jwt>"}` as the first text frame within `ENGINE_WS_AUTH_TIMEOUT_S` (default `5s`).
+- **Header fallback**: Non-browser clients may pass `Authorization: Bearer <jwt>` on the WebSocket upgrade request.
+- **Token refresh**: Send `{"type": "auth_refresh", "token": "<new_jwt>"}` mid-session to extend `exp` without interrupting streaming.
+
+#### 16-Byte Binary Media Frame Header (`!BBHIQ`, Big-Endian)
+
+| Offset | Size | Field         | Description                                                                                                                                  |
+| :----- | :--- | :------------ | :------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`    | `1`  | `version`     | Protocol version (`1`)                                                                                                                       |
+| `1`    | `1`  | `track_codec` | High nibble: Track (`1`=Video, `2`=Audio). Low nibble: Video (`1`=H.264 Annex-B, `2`=MJPEG) or Audio (`1`=PCM16 LE mono, `2`=PCM32F LE mono) |
+| `2`    | `2`  | `flags`       | Bitmask: `0x0001`=KEYFRAME, `0x0002`=END_OF_CHUNK, `0x0004`=SILENCE, `0x0008`=PASSTHROUGH, `0x0010`=SPEECH_ACTIVE                            |
+| `4`    | `4`  | `seq`         | Monotonic frame/chunk sequence number (`uint32`)                                                                                             |
+| `8`    | `8`  | `pts_us`      | Capture presentation timestamp in microseconds (`uint64`)                                                                                    |
+| `16`   | `N`  | `payload`     | Raw media payload (H.264 Annex-B AU, JPEG bytes, or PCM samples)                                                                             |
+
+#### Control Messages (JSON Text Frames)
+
+- **Client -> Server**: `auth`, `auth_refresh`, `start` (optional `prompt`, `ref_image_*`, `ref_audio_*`, `video`, `audio`), `update_config`, `ping`, `stop`.
+- **Server -> Client**: `auth_ok`, `started`, `config_updated`, `pong`, `sync_stats`, `waiting_face`, `no_person`, `editing`, `session_superseded`, `stopped`, `error`.
+
+## JWT Claims Contract (`apps/api` -> `apps/engine-py`)
+
+Tokens must be signed with **EdDSA (Ed25519)** using the private key held by `apps/api`:
+
+- `sub` (`string`, required): User ID; verified against `ENGINE_USER_ID` (or bound to the first user in dev).
+- `aud` (`string`, required when `ENGINE_INSTANCE_ID` is set): Target instance `instance_id`.
+- `iss` (`string`, optional): Verified when `ENGINE_JWT_ISSUER` is configured.
+- `exp` (`number`, required): Expiration timestamp (checked on HTTP, WS auth, and mid-session).
+- `modalities` (`("voice" | "video")[]`, optional): Defaults to enabled instance modalities; any requested modality not enabled on the instance returns `403` / WS `4003`.
+
+## Lifecycle, Single-User Takeover & Signed Webhooks
+
+- **States**: `booting` -> `ready_idle` -> `active` <-> `disconnect_grace` -> `shutting_down`.
+- **Timeouts**:
+  - `ENGINE_STARTUP_IDLE_TIMEOUT_S` (`120s` default): shuts down if no user connects after warmup.
+  - `ENGINE_DISCONNECT_TIMEOUT_S` (`30s` default): shuts down if the user disconnects and does not reconnect before the grace window expires.
+- **Single-user takeover**: Opening a new authenticated WebSocket for the same `sub` cleanly closes the stale socket (`4009`, `session_superseded`) without triggering the disconnect countdown.
+- **Lifecycle webhooks**: When `ENGINE_LIFECYCLE_WEBHOOK_URL` is configured, POSTs JSON events (`ready`, `connected`, `disconnected`, `shutting_down`) signed with `X-Metamorph-Signature: sha256=<hmac-sha256>` using `ENGINE_LIFECYCLE_WEBHOOK_SECRET`.
+
+## Docker & GPU Deployment
+
+### Multi-Target Image ([Dockerfile](../apps/engine-py/Dockerfile))
+
+Always build from the **repository root** (use [`build-image.sh`](../apps/engine-py/scripts/build-image.sh)):
+
+| Target  | Base Image                                     | Purpose                                                                                       |
+| :------ | :--------------------------------------------- | :-------------------------------------------------------------------------------------------- |
+| `full`  | `nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04`   | Voice + RV2V/V2V GPU image (`JoyAI-Video-Edit` + `joyomni_ops` FP8 + `Seed-VC`)               |
+| `voice` | `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04` | Smaller/faster CUDA 12.8 runtime image for voice-only instances (`ENGINE_ENABLE_VIDEO=false`) |
+| `mock`  | `python:3.12-slim`                             | Lightweight CPU mock image (`ENGINE_BACKEND=mock`) for local `apps/api` dev                   |
+
+```bash
+# Full GPU image (default: Ada sm_89 + Hopper sm_90a + Blackwell sm_100a/120a + SageAttention 2.2.0)
+./apps/engine-py/scripts/build-image.sh --image ghcr.io/your-org/metamorph-engine --target full --push
+
+# Full GPU image without SageAttention
+./apps/engine-py/scripts/build-image.sh --target full --no-sage-attn --cuda-archs "89;90a;100a"
+
+# Voice-only CUDA image
+./apps/engine-py/scripts/build-image.sh --image ghcr.io/your-org/metamorph-engine --target voice --push
+
+# Local CPU mock dev via Docker Compose
+./apps/engine-py/scripts/gen-jwt-keys.sh --out-dir ./tmp-keys
+docker compose -f apps/engine-py/docker-compose.yml up --build engine-mock
+```
+
+### Model Volume Layout & Pre-Population
+
+Weights and per-GPU Triton/TorchInductor compile caches are mounted externally at `/models` (or `/workspace`, or via `MODEL_VOLUME_DIR`) so containers pull quickly:
+
+```text
+/models/
+├── checkpoints/
+│   ├── JoyAI-Video-Edit/
+│   │   ├── dit/joyai_video_edit_dit_1101_face++.pth
+│   │   └── vae/{config.json, diffusion_pytorch_model.safetensors}
+│   ├── MiMo-VL-7B-RL-2508/
+│   ├── Qwen3.6-27B-GPTQ-Int4-FOEM/      # optional local PE
+│   ├── face_detection_yunet_2023mar.onnx
+│   ├── yolov8n.onnx                     # optional full-body gate (320x320)
+│   └── seed-vc/
+├── hf_cache/
+├── torch_cache/
+└── cache/<gpu_slug>/                    # isolated torchinductor/triton/nv_compute caches
+```
+
+Populate a volume once using [`download_models.sh`](../apps/engine-py/scripts/download_models.sh) (or set `AUTO_DOWNLOAD_MODELS=true` on boot).
+
+### CI/CD (GitHub Actions -> Docker Hub)
+
+[engine-docker.yml](../.github/workflows/engine-docker.yml) runs `pytest`, `ruff`, and `ty`, then builds and pushes `mock`, `voice`, and `full` images on pushes to `main`, `engine-v*` tags, and manual `workflow_dispatch` runs (PRs build and smoke-test `mock` without pushing).
+
+- **Required Secrets**: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (plus optional `SUBMODULES_TOKEN` if vendor submodules are private).
+- **Optional Repository Variable**: `DOCKERHUB_IMAGE` (defaults to `metamorph-engine`).
+- **Published Tags**: `:<target>` (`full`, `voice`, `mock`) and `:latest` (`full`) on `main`, `:<target>-sha-<short>`, plus semver tags on `engine-v*` releases.
+- **Manual Dispatch Inputs**: Select `targets` (`all` | `full` | `voice` | `mock`), `cuda_archs`, `build_fp8`, `install_sage_attn`, `install_fa4`, `max_jobs`, and `push`.
+
+### Container Runtime Contract (`apps/api`)
+
+- **Targets & CUDA**: `full` (voice + video), `voice` (voice-only), `mock` (CPU dev); `full` and `voice` require CUDA 12.8+.
+- **Port & Volume**: Exposes container port `8000` (`0.0.0.0:8000`); mount checkpoints/caches at `/models` (auto-falls back to `/workspace`, or override with `MODEL_VOLUME_DIR`).
+- **Required `ENGINE_*` env vars**:
+  - `ENGINE_INSTANCE_ID`, `ENGINE_USER_ID`
+  - `ENGINE_ENABLE_VOICE` (`"true"`/`"false"`), `ENGINE_ENABLE_VIDEO` (`"true"`/`"false"`)
+  - `ENGINE_JWT_PUBLIC_KEY` (single-line Ed25519 PEM with `\n` escapes)
+  - `ENGINE_LIFECYCLE_WEBHOOK_URL`, `ENGINE_LIFECYCLE_WEBHOOK_SECRET`
+  - Optional bootstrap: `ENGINE_INITIAL_PROMPT`, `ENGINE_INITIAL_REF_IMAGE_URL`, `ENGINE_INITIAL_REF_AUDIO_URL`
+
+#### Modality -> Image & GPU Sizing
+
+| Modalities (`ENGINE_ENABLE_*`)             | Image Target | Minimum / Recommended GPU                                                                                      | Notes                                                                                                             |
+| :----------------------------------------- | :----------- | :------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------- |
+| Voice only (`VOICE=true`, `VIDEO=false`)   | `:voice`     | `>=16 GB` CUDA 12.8+ GPU (e.g. L4 / RTX 4090)                                                                  | Runs `Seed-VC` (`~2–2.5 GiB` VRAM)                                                                                |
+| Video only (`VOICE=false`, `VIDEO=true`)   | `:full`      | `>=32 GB` GPU (**RTX 5090** for `480p24`, `PE=none`; `>=48 GB` / **RTX PRO 6000** for `720p` or local Qwen PE) | JoyAI `480p24` low-VRAM uses `~21.5 GiB` resident / `~28 GiB` peak; SageAttention 2.2.0 is bundled for 5090       |
+| Video + Voice (`VOICE=true`, `VIDEO=true`) | `:full`      | **`>=48 GB` VRAM (recommended: RTX PRO 6000 96 GB)**                                                           | Combined JoyAI (`~28 GiB` peak) + Seed-VC (`~2–2.5 GiB`) leaves minimal VRAM/compute headroom on a 32 GB RTX 5090 |
+
+## Key Configuration (`ENGINE_*`)
+
+| Variable                                                        | Default                   | Description                                     |
+| :-------------------------------------------------------------- | :------------------------ | :---------------------------------------------- |
+| `ENGINE_HOST` / `ENGINE_PORT`                                   | `0.0.0.0` / `8000`        | Bind address and port                           |
+| `ENGINE_INSTANCE_ID` / `ENGINE_USER_ID`                         | `local-instance` / `None` | Dedicated instance and user binding             |
+| `ENGINE_ENABLE_VOICE` / `ENGINE_ENABLE_VIDEO`                   | `true` / `true`           | Modalities loaded at boot                       |
+| `ENGINE_BACKEND`                                                | `gpu`                     | `gpu` (Seed-VC + JoyAI) or `mock` (CPU testing) |
+| `ENGINE_JWT_PUBLIC_KEY` / `ENGINE_JWT_ISSUER`                   | `""` / `None`             | Ed25519 PEM public key and expected issuer      |
+| `ENGINE_STARTUP_IDLE_TIMEOUT_S` / `ENGINE_DISCONNECT_TIMEOUT_S` | `120.0` / `30.0`          | Idle and disconnect shutdown timeouts           |
+| `ENGINE_LIFECYCLE_WEBHOOK_URL` / `_SECRET`                      | `None`                    | Signed lifecycle webhook destination            |
+| `ENGINE_INITIAL_PROMPT` / `_REF_IMAGE_URL` / `_REF_AUDIO_URL`   | `None`                    | Startup reference asset bootstrap               |
+| `ENGINE_VIDEO_WIDTH` / `_HEIGHT` / `_FPS`                       | `840` / `480` / `24`      | Video streaming resolution and FPS              |
+| `ENGINE_VIDEO_PE_BACKEND` / `ENGINE_VIDEO_DETECTION_MODE`       | `none` / `off`            | Optional prompt enhancement and presence gate   |
+| `ENGINE_VOICE_SAMPLE_RATE` / `_VAD_BACKEND`                     | `22050` / `rms`           | Seed-VC sample rate and VAD mode                |
+| `ENGINE_AV_SYNC_ENABLED` / `_MAX_HOLD_S`                        | `true` / `1.0`            | Adaptive dual-modality A/V sync controls        |
 
 ## Commands
 
 Run from the repository root:
 
-| Command                                              | Action                                   |
-| :--------------------------------------------------- | :--------------------------------------- |
-| `uv sync --all-packages`                             | Sync workspace dependencies into `.venv` |
-| `uv run --package metamorph-engine metamorph-engine` | Start the inference server               |
-| `pnpm format:check && pnpm lint && pnpm typecheck`   | Full repo verification                   |
+| Command                                              | Action                                            |
+| :--------------------------------------------------- | :------------------------------------------------ |
+| `uv sync --all-packages`                             | Sync workspace runtime and dev/test dependencies  |
+| `uv sync --all-packages --extra gpu`                 | Install optional CUDA/ML packages on GPU hosts    |
+| `uv run pytest -v`                                   | Run full CPU test suite (`ENGINE_BACKEND=mock`)   |
+| `uv run --package metamorph-engine metamorph-engine` | Start the inference server                        |
+| `pnpm format:check && pnpm lint && pnpm typecheck`   | Full repo formatting, lint, and type verification |

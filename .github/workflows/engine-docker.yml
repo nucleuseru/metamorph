@@ -1,0 +1,229 @@
+name: Build & Deploy Engine Docker
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "engine-v*"
+    paths:
+      - "apps/engine-py/**"
+      - "packages/shared-py/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".python-version"
+      - ".dockerignore"
+      - "vendor/**"
+      - ".github/workflows/engine-docker.yml"
+  pull_request:
+    paths:
+      - "apps/engine-py/**"
+      - "packages/shared-py/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".python-version"
+      - ".dockerignore"
+      - "vendor/**"
+      - ".github/workflows/engine-docker.yml"
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "Image targets to build"
+        type: choice
+        default: all
+        options:
+          - all
+          - full
+          - voice
+          - mock
+      cuda_archs:
+        description: "CUDA architectures for joyomni_ops (full target)"
+        type: string
+        default: "89;90a;100a;120a"
+      build_fp8:
+        description: "Compile CUTLASS FP8 GEMM kernels (full target)"
+        type: boolean
+        default: true
+      install_sage_attn:
+        description: "Build SageAttention 2.2.0 for RTX 5090 (full target)"
+        type: boolean
+        default: true
+      install_fa4:
+        description: "Install flash-attn-4 for B200 (full target)"
+        type: boolean
+        default: false
+      max_jobs:
+        description: "Parallel CUDA compiler jobs (full target)"
+        type: string
+        default: "2"
+      push:
+        description: "Push built images to Docker Hub"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test & Lint engine-py
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - name: Install Python dependencies
+        run: uv sync --all-packages
+
+      - name: Run pytest
+        run: uv run pytest -v
+
+      - name: Run ruff and ty checks
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run ty check
+
+  build-and-deploy:
+    name: Build & Deploy (${{ matrix.target }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - mock
+          - voice
+          - full
+    if: >-
+      (github.event_name == 'pull_request' && matrix.target == 'mock') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.targets == 'all' || inputs.targets == matrix.target)) ||
+      (github.event_name == 'push')
+
+    steps:
+      - name: Determine build & push flags
+        id: flags
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PUSH: ${{ inputs.push }}
+          TARGET: ${{ matrix.target }}
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DH_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+        run: |
+          should_push="false"
+          if [ "$EVENT_NAME" = "push" ]; then
+            should_push="true"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_PUSH" = "true" ]; then
+            should_push="true"
+          fi
+
+          if [ "$should_push" = "true" ]; then
+            if [ -z "$DH_USER" ] || [ -z "$DH_TOKEN" ]; then
+              echo "::error::DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets must be configured to deploy to Docker Hub."
+              exit 1
+            fi
+          fi
+
+          repo_owner="${DH_USER:-local}"
+          image_name="${DH_IMAGE:-metamorph-engine}"
+          full_repo="${repo_owner}/${image_name}"
+
+          should_load="false"
+          if [ "$should_push" != "true" ] && [ "$TARGET" = "mock" ]; then
+            should_load="true"
+          fi
+
+          {
+            echo "should_push=${should_push}"
+            echo "should_load=${should_load}"
+            echo "image_repo=${full_repo}"
+            if [ "$should_push" = "true" ]; then
+              echo "cache_from=type=registry,ref=${full_repo}:buildcache-${TARGET}"
+              echo "cache_to=type=registry,ref=${full_repo}:buildcache-${TARGET},mode=max"
+            else
+              echo "cache_from=type=gha,scope=engine-${TARGET}"
+              echo "cache_to=type=gha,scope=engine-${TARGET},mode=max"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Free runner disk space for GPU builds
+        if: matrix.target != 'mock'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          docker system prune -af || true
+          df -h
+
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: steps.flags.outputs.should_push == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.flags.outputs.image_repo }}
+          tags: |
+            type=raw,value=${{ matrix.target }},enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/engine-v') || github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable=${{ matrix.target == 'full' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/engine-v')) }}
+            type=sha,prefix=${{ matrix.target }}-,format=short
+            type=match,pattern=^engine-v(.+)$,group=1,prefix=${{ matrix.target }}-,enable=${{ startsWith(github.ref, 'refs/tags/engine-v') }}
+            type=match,pattern=^engine-v(.+)$,group=1,enable=${{ matrix.target == 'full' && startsWith(github.ref, 'refs/tags/engine-v') }}
+
+      - name: Build and deploy Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/engine-py/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: ${{ steps.flags.outputs.should_push == 'true' }}
+          load: ${{ steps.flags.outputs.should_load == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: ${{ steps.flags.outputs.cache_from }}
+          cache-to: ${{ steps.flags.outputs.cache_to }}
+          build-args: |
+            CUDA_ARCHS=${{ inputs.cuda_archs || '89;90a;100a;120a' }}
+            BUILD_FP8=${{ inputs.build_fp8 == false && '0' || '1' }}
+            INSTALL_SAGE_ATTN=${{ inputs.install_sage_attn == false && '0' || '1' }}
+            INSTALL_FA4=${{ inputs.install_fa4 == true && '1' || '0' }}
+            MAX_JOBS=${{ inputs.max_jobs || '2' }}
+
+      - name: Smoke-test mock container
+        if: steps.flags.outputs.should_load == 'true'
+        run: |
+          IMAGE_TAG="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
+          CID="$(docker run -d -p 8000:8000 -e ENGINE_BACKEND=mock "$IMAGE_TAG")"
+          trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/ready; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$CID"
+          exit 1
