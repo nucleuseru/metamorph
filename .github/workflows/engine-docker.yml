@@ -89,8 +89,12 @@ jobs:
             echo 'targets=["mock","voice","full"]' >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout repository
+      - name: Checkout repository with submodules
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
