@@ -72,7 +72,23 @@ jobs:
   test:
     name: Test & Lint engine-py
     runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
     steps:
+      - name: Determine image build targets
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TARGETS: ${{ inputs.targets }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo 'targets=["mock"]' >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_TARGETS" ] && [ "$INPUT_TARGETS" != "all" ]; then
+            echo "targets=[\"${INPUT_TARGETS}\"]" >> "$GITHUB_OUTPUT"
+          else
+            echo 'targets=["mock","voice","full"]' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -101,14 +117,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - mock
-          - voice
-          - full
-    if: >-
-      (github.event_name == 'pull_request' && matrix.target == 'mock') ||
-      (github.event_name == 'workflow_dispatch' && (inputs.targets == 'all' || inputs.targets == matrix.target)) ||
-      (github.event_name == 'push')
+        target: ${{ fromJSON(needs.test.outputs.targets) }}
 
     steps:
       - name: Determine build & push flags
@@ -208,9 +217,9 @@ jobs:
           cache-to: ${{ steps.flags.outputs.cache_to }}
           build-args: |
             CUDA_ARCHS=${{ inputs.cuda_archs || '89;90a;100a;120a' }}
-            BUILD_FP8=${{ inputs.build_fp8 == false && '0' || '1' }}
-            INSTALL_SAGE_ATTN=${{ inputs.install_sage_attn == false && '0' || '1' }}
-            INSTALL_FA4=${{ inputs.install_fa4 == true && '1' || '0' }}
+            BUILD_FP8=${{ github.event_name == 'workflow_dispatch' && inputs.build_fp8 == false && '0' || '1' }}
+            INSTALL_SAGE_ATTN=${{ github.event_name == 'workflow_dispatch' && inputs.install_sage_attn == false && '0' || '1' }}
+            INSTALL_FA4=${{ github.event_name == 'workflow_dispatch' && inputs.install_fa4 == true && '1' || '0' }}
             MAX_JOBS=${{ inputs.max_jobs || '2' }}
 
       - name: Smoke-test mock container

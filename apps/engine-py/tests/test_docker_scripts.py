@@ -181,9 +181,16 @@ def test_github_workflow_builds_and_deploys_all_targets() -> None:
         "- mock",
         "- voice",
         "- full",
-        "INSTALL_SAGE_ATTN=${{ inputs.install_sage_attn == false && '0' || '1' }}",
+        "fromJSON(needs.test.outputs.targets)",
+        (
+            "INSTALL_SAGE_ATTN=${{ github.event_name == 'workflow_dispatch' "
+            "&& inputs.install_sage_attn == false && '0' || '1' }}"
+        ),
     ):
         assert required in content, f"Workflow missing expected entry: {required}"
+
+    job_if_lines = [line for line in content.splitlines() if line.startswith("    if:")]
+    assert all("matrix." not in line for line in job_if_lines)
 
     docker_content = dockerfile.read_text(encoding="utf-8")
     assert "ARG INSTALL_SAGE_ATTN=1" in docker_content
