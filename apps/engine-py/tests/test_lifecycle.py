@@ -288,9 +288,9 @@ def test_async_startup_failure_triggers_shutdown_webhook(
     with TestClient(app):
         assert shutdown_called.wait(timeout=2.0)
         assert app.state.lifecycle.state == LifecycleState.SHUTTING_DOWN
-        assert app.state.lifecycle.startup_error == "missing cuda weights"
 
     assert any(
-        e.payload["event"] == "shutting_down" and "startup_failed" in e.payload["reason"]
+        e.payload["event"] == "shutting_down"
+        and "startup_failed: missing cuda weights" in e.payload["reason"]
         for e in recorder.events
     )

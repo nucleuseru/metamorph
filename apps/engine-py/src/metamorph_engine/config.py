@@ -29,7 +29,6 @@ class EngineSettings(BaseSettings):
     # Server
     host: str = "0.0.0.0"
     port: int = Field(default=8000, ge=1, le=65535)
-    workers: int = Field(default=1, ge=1, le=1)
     access_log: bool = False
     log_level: str = "info"
     cors_origins: str = "*"
@@ -44,6 +43,9 @@ class EngineSettings(BaseSettings):
 
     # Authentication (EdDSA / Ed25519 JWT minted by apps/api)
     jwt_public_key: str = ""
+    jwt_jwks_url: str | None = None
+    jwt_jwks_cache_ttl_s: int = Field(default=300, ge=1)
+    jwt_audience: str | None = None
     jwt_issuer: str | None = None
     jwt_leeway_s: int = Field(default=10, ge=0)
     ws_auth_timeout_s: float = Field(default=5.0, gt=0.0)
@@ -83,12 +85,11 @@ class EngineSettings(BaseSettings):
     voice_diffusion_steps: int = Field(default=10, ge=1, le=50)
     voice_cfg_rate: float = Field(default=0.7, ge=0.0, le=2.0)
     voice_max_prompt_length_s: float = Field(default=3.0, ge=0.5, le=30.0)
-    voice_vad_backend: Literal["rms", "silero", "fsmn", "none"] = "rms"
+    voice_vad_backend: Literal["rms", "none"] = "rms"
     voice_vad_threshold_db: float = Field(default=-45.0, ge=-90.0, le=0.0)
     voice_vad_hangover_s: float = Field(default=0.3, ge=0.0, le=5.0)
     voice_vad_adaptive_noise_floor: bool = True
     voice_vad_noise_margin_db: float = Field(default=10.0, ge=0.0, le=40.0)
-    voice_vad_silero_threshold: float = Field(default=0.5, ge=0.05, le=0.95)
     voice_checkpoint_path: str | None = None
     voice_config_path: str | None = None
     voice_cache_dir: str | None = None
@@ -101,33 +102,12 @@ class EngineSettings(BaseSettings):
     video_seed: int = 42
     video_output_quality: int = Field(default=60, ge=1, le=100)
     video_max_inflight_chunks: int = Field(default=2, ge=0, le=16)
-    video_kv_reset_frames: int = Field(default=0, ge=0)
     video_freeze_kv_on_static: bool = True
     video_static_diff_thresh: float = Field(default=0.5, ge=0.0)
     video_max_temporal_ids: int | None = Field(default=8, ge=1)
-    video_pe_backend: Literal["none", "api", "qwen"] = "none"
-    video_pe_ckpt: str | None = None
-    video_pe_model: str | None = None
-    video_pe_timeout_s: float = Field(default=20.0, gt=0.0)
-    video_detection_mode: Literal["off", "near", "full"] = "off"
-    video_face_score_thresh: float = Field(default=0.35, ge=0.05, le=1.0)
-    video_face_min_below_ratio: float = Field(default=0.20, ge=0.0, le=0.8)
-    video_face_center_margin: float = Field(default=0.35, ge=0.05, le=0.5)
-    video_face_move_eps: float = Field(default=0.02, ge=0.0, le=0.5)
-    video_face_settle_drift: float = Field(default=0.05, ge=0.0, le=0.5)
-    video_face_stable_frames: int = Field(default=24, ge=1, le=240)
-    video_presence_absent_frames: int = Field(default=12, ge=1, le=240)
-    video_presence_return_frames: int = Field(default=24, ge=1, le=240)
-    video_detection_stride: int = Field(default=2, ge=1, le=16)
-    video_person_gate_conf: float = Field(default=0.4, ge=0.05, le=1.0)
-    video_gate_fail_open_missing_person_model: bool = True
     video_dit_ckpt: str | None = None
     video_vae_ckpt: str | None = None
     video_text_encoder_ckpt: str | None = None
-    video_face_detector_onnx: str | None = None
-    video_person_detector_onnx: str | None = None
-    video_session_init_timeout_s: float = Field(default=120.0, gt=0.0)
-    video_push_frame_timeout_s: float = Field(default=15.0, gt=0.0)
     video_session_close_timeout_s: float = Field(default=5.0, gt=0.0)
 
     # A/V Synchronization

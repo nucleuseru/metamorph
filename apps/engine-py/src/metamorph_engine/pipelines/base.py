@@ -11,7 +11,6 @@ from PIL import Image
 
 from metamorph_engine.protocol import (
     AudioCodec,
-    DetectionMode,
     FrameFlags,
     VideoCodec,
     VideoCodecName,
@@ -40,19 +39,16 @@ class VideoSessionConfig:
     prompt: str = (
         "Keep the person and scene temporally consistent while applying the requested edit."
     )
-    input_codec: VideoCodecName = "h264"
-    output_codec: VideoCodecName = "h264"
+    input_codec: VideoCodecName = "mjpeg"
+    output_codec: VideoCodecName = "mjpeg"
     width: int = 840
     height: int = 480
     fps: int = 24
     num_inference_steps: int = 2
     seed: int = 42
     output_quality: int = 60
-    detection_mode: DetectionMode = "off"
-    use_pe: bool = False
     freeze_kv_on_static: bool = True
     static_diff_thresh: float = 0.5
-    kv_reset_frames: int = 0
     max_temporal_ids: int | None = 8
 
 
@@ -104,17 +100,9 @@ class VideoFrameOut:
 
 @dataclass(frozen=True, slots=True)
 class VideoGateEvent:
-    """Non-fatal pipeline state/gating notification to emit as JSON control frame."""
+    """Non-fatal pipeline backpressure notification to emit as JSON control frame."""
 
-    event_type: Literal[
-        "waiting_face",
-        "no_person",
-        "editing",
-        "pe_running",
-        "prompt_enhanced",
-        "session_reset",
-        "dropped",
-    ]
+    event_type: Literal["dropped"]
     reason: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
     frame_accepted: bool = False
@@ -122,24 +110,19 @@ class VideoGateEvent:
 
 
 def decode_pcm_bytes(payload: bytes | memoryview, codec: AudioCodec) -> np.ndarray:
-    """Convert raw PCM16 LE or PCM32F LE bytes into mono float32 samples in [-1, 1]."""
-    if codec == AudioCodec.PCM_S16LE:
-        arr = np.frombuffer(payload, dtype="<i2").astype(np.float32) / 32768.0
-    elif codec == AudioCodec.PCM_F32LE:
-        arr = np.frombuffer(payload, dtype="<f4").astype(np.float32, copy=True)
-    else:
+    """Convert raw PCM16 LE bytes into mono float32 samples in [-1, 1]."""
+    if codec != AudioCodec.PCM_S16LE:
         raise ValueError(f"Unsupported audio codec: {codec}")
+    arr = np.frombuffer(payload, dtype="<i2").astype(np.float32) / 32768.0
     return np.clip(arr, -1.0, 1.0)
 
 
 def encode_pcm_bytes(samples: np.ndarray, codec: AudioCodec) -> bytes:
-    """Serialize mono float32 samples into PCM16 LE or PCM32F LE wire bytes."""
+    """Serialize mono float32 samples into PCM16 LE wire bytes."""
+    if codec != AudioCodec.PCM_S16LE:
+        raise ValueError(f"Unsupported audio codec: {codec}")
     clipped = np.clip(samples, -1.0, 1.0)
-    if codec == AudioCodec.PCM_S16LE:
-        return (clipped * 32767.0).astype("<i2").tobytes()
-    if codec == AudioCodec.PCM_F32LE:
-        return clipped.astype("<f4").tobytes()
-    raise ValueError(f"Unsupported audio codec: {codec}")
+    return (clipped * 32767.0).astype("<i2").tobytes()
 
 
 def resample_audio_linear(samples: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
@@ -256,10 +239,6 @@ class VoiceSession(ABC):
         """Hot-swap target speaker reference waveform."""
 
     @abstractmethod
-    def flush(self) -> list[AudioChunkOut]:
-        """Flush any buffered audio samples on stop/close."""
-
-    @abstractmethod
     def close(self) -> None:
         """Release per-session buffers."""
 
@@ -303,10 +282,6 @@ class VideoSession(ABC):
     @abstractmethod
     def update_config(self, config: VideoSessionConfig, ref_image: Image.Image | None) -> None:
         """Hot-swap prompt, reference image, or streaming video settings."""
-
-    @abstractmethod
-    def flush(self) -> None:
-        """Flush any pending partial chunk."""
 
     @abstractmethod
     def close(self) -> None:

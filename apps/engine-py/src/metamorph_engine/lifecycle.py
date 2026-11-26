@@ -65,18 +65,12 @@ class InstanceLifecycleManager:
 
         self._shutdown_task: asyncio.Task[None] | None = None
         self._shutdown_reason: str | None = None
-        self._startup_error: str | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def state(self) -> LifecycleState:
         """Return current lifecycle state."""
         return self._state
-
-    @property
-    def startup_error(self) -> str | None:
-        """Return fatal startup failure detail, if any."""
-        return self._startup_error
 
     @property
     def active_user_id(self) -> str | None:
@@ -105,14 +99,6 @@ class InstanceLifecycleManager:
             return None
         return round(max(0.0, self._idle_deadline_mono - time.monotonic()), 2)
 
-    def set_shutdown_callback(self, callback: Callable[[], None]) -> None:
-        """Attach the server-exit callback after uvicorn Server is created."""
-        self._shutdown_callback = callback
-
-    def set_teardown_hook(self, callback: Callable[[], Awaitable[None]]) -> None:
-        """Attach async session teardown hook executed before shutdown."""
-        self._on_teardown = callback
-
     async def mark_ready(self) -> None:
         """Transition BOOTING -> READY_IDLE, start idle timeout, emit `ready` webhook."""
         async with self._lock:
@@ -126,7 +112,6 @@ class InstanceLifecycleManager:
 
     async def mark_startup_failed(self, error: str) -> None:
         """Record fatal startup failure and trigger graceful shutdown."""
-        self._startup_error = error
         await self.request_shutdown(f"startup_failed: {error}")
 
     async def register_connection(

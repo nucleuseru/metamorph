@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import time
+from typing import Any
+
+import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from metamorph_engine.main import create_app
 from starlette.websockets import WebSocketDisconnect
@@ -122,3 +129,98 @@ def test_ws_bearer_header_auth() -> None:
         auth_ok = ws.receive_json()
         assert auth_ok["type"] == "auth_ok"
         assert auth_ok["authorized_modalities"] == ["video"]
+
+
+# --- JWKS verification (Better Auth `jwt()` plugin tokens) -------------------------------------
+
+JWKS_URL = "https://api.example.test/api/auth/jwks"
+BA_ISSUER = "https://api.example.test"
+
+
+def _jwks_for(private_key: Ed25519PrivateKey, kid: str) -> dict[str, Any]:
+    raw = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    x = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    return {"keys": [{"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA", "kid": kid, "x": x}]}
+
+
+def _better_auth_token(
+    private_key: Ed25519PrivateKey,
+    *,
+    kid: str = "key-1",
+    sub: str = "user-1",
+    aud: str = BA_ISSUER,
+    iss: str = BA_ISSUER,
+    exp_offset_s: int = 300,
+) -> str:
+    """Mimic a Better Auth jwt() plugin token: EdDSA, `kid` header, no `modalities`."""
+    now = int(time.time())
+    payload = {"sub": sub, "iss": iss, "aud": aud, "iat": now, "exp": now + exp_offset_s}
+    return jwt.encode(payload, private_key, algorithm="EdDSA", headers={"kid": kid})
+
+
+@pytest.fixture
+def jwks_signer(monkeypatch: pytest.MonkeyPatch) -> Ed25519PrivateKey:
+    private_key, _ = generate_ed25519_keypair()
+    jwks = _jwks_for(private_key, "key-1")
+    monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", lambda self: jwks)
+    return private_key
+
+
+def _jwks_app() -> Any:
+    settings = build_test_settings(
+        "",
+        jwt_jwks_url=JWKS_URL,
+        jwt_issuer=BA_ISSUER,
+        jwt_audience=BA_ISSUER,
+    )
+    return create_app(settings)
+
+
+def test_http_auth_via_jwks(jwks_signer: Ed25519PrivateKey) -> None:
+    other_priv, _ = generate_ed25519_keypair()
+    with TestClient(_jwks_app()) as client:
+        ok = client.get(
+            "/session/status",
+            headers={"Authorization": f"Bearer {_better_auth_token(jwks_signer)}"},
+        )
+        assert ok.status_code == 200
+        assert ok.json()["user_id"] == "user-1"
+
+        def status(token: str) -> int:
+            return client.get(
+                "/session/status", headers={"Authorization": f"Bearer {token}"}
+            ).status_code
+
+        assert status(_better_auth_token(other_priv)) == 401  # wrong signature
+        assert status(_better_auth_token(jwks_signer, kid="unknown")) == 401
+        assert status(_better_auth_token(jwks_signer, aud="https://evil.test")) == 401
+        assert status(_better_auth_token(jwks_signer, iss="https://evil.test")) == 401
+        assert status(_better_auth_token(jwks_signer, exp_offset_s=-60)) == 401
+        assert status(_better_auth_token(jwks_signer, sub="user-999")) == 403
+
+
+def test_ws_auth_via_jwks_defaults_to_enabled_modalities(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
+    with (
+        TestClient(_jwks_app()) as client,
+        client.websocket_connect("/ws/session") as ws,
+    ):
+        ws.send_json({"type": "auth", "token": _better_auth_token(jwks_signer)})
+        auth_ok = ws.receive_json()
+        assert auth_ok["type"] == "auth_ok"
+        assert auth_ok["authorized_modalities"] == ["voice", "video"]
+
+
+def test_no_verification_key_configured_rejects_tokens() -> None:
+    priv, _ = generate_ed25519_keypair()
+    app = create_app(build_test_settings(""))
+    with TestClient(app) as client:
+        resp = client.get(
+            "/session/status",
+            headers={"Authorization": f"Bearer {mint_jwt(priv)}"},
+        )
+        assert resp.status_code == 401

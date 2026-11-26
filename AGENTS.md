@@ -9,6 +9,7 @@
 3. **Tooling**: Use the root-configured tools (`oxfmt`, `oxlint`, `tsc`, `ruff`, `ty`). Do not add per-app ESLint, Prettier, Black, or mypy configs.
 4. **Vendor submodules**: Do not format, lint, or directly modify `vendor/` unless explicitly tasked with patching upstream code.
 5. **Verify before finishing**: Run `pnpm format:check && pnpm lint && pnpm typecheck` after code or config changes.
+6. Read [DESIGN.md](DESIGN.md) before writing or changing any UI. Treat it as the source of truth for colors, typography, spacing, and components.
 
 ## Documentation
 

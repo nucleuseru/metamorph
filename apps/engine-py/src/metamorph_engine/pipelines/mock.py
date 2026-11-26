@@ -127,29 +127,6 @@ class MockVoiceSession(VoiceSession):
     def update_reference_audio(self, audio_f32: np.ndarray, sample_rate: int) -> None:
         self._pipeline.set_reference_audio(audio_f32, sample_rate)
 
-    def flush(self) -> list[AudioChunkOut]:
-        if self._buffer.size == 0:
-            return []
-        pad = np.zeros(self._block_samples - self._buffer.shape[0], dtype=np.float32)
-        block = np.concatenate([self._buffer, pad])
-        pts_us = self._buffer_start_pts_us or 0
-        self._buffer = np.zeros(0, dtype=np.float32)
-        self._buffer_start_pts_us = None
-        out_resampled = resample_audio_linear(
-            block, self._model_sr, self._config.output_sample_rate
-        )
-        self._out_seq += 1
-        return [
-            AudioChunkOut(
-                payload=encode_pcm_bytes(out_resampled, self._config.output_codec),
-                codec=self._config.output_codec,
-                sample_rate=self._config.output_sample_rate,
-                seq=self._out_seq,
-                pts_us=max(0, pts_us - self._lookahead_us),
-                flags=FrameFlags.END_OF_CHUNK,
-            )
-        ]
-
     def close(self) -> None:
         self._buffer = np.zeros(0, dtype=np.float32)
 
@@ -238,9 +215,6 @@ class MockVideoSession(VideoSession):
                 time.sleep(latency_s)
 
             total = len(batch)
-            out_codec = (
-                VideoCodec.H264_ANNEXB if self._config.output_codec == "h264" else VideoCodec.MJPEG
-            )
             for idx, frame in enumerate(batch):
                 self._out_seq += 1
                 flags = FrameFlags.NONE
@@ -249,23 +223,18 @@ class MockVideoSession(VideoSession):
                 if idx == total - 1:
                     flags |= FrameFlags.END_OF_CHUNK
 
-                payload = self._render_mock_frame(frame, out_codec)
+                payload = self._render_mock_frame(frame)
                 self._out_queue.put(
                     VideoFrameOut(
                         payload=payload,
-                        codec=out_codec,
+                        codec=VideoCodec.MJPEG,
                         seq=self._out_seq,
                         pts_us=frame.pts_us,
                         flags=flags,
                     )
                 )
 
-    def _render_mock_frame(self, frame: VideoFrameIn, out_codec: VideoCodec) -> bytes:
-        if out_codec == VideoCodec.H264_ANNEXB:
-            # Valid Annex-B start code prefix followed by deterministic frame marker
-            ref_tag = b"rv2v" if self._ref_image is not None else b"v2v"
-            return b"\x00\x00\x00\x01\x65" + ref_tag + frame.payload[:32]
-
+    def _render_mock_frame(self, frame: VideoFrameIn) -> bytes:
         # Render or re-encode a clean small JPEG
         if frame.payload[:3] == b"\xff\xd8\xff":
             try:
@@ -298,12 +267,6 @@ class MockVideoSession(VideoSession):
     def update_config(self, config: VideoSessionConfig, ref_image: Image.Image | None) -> None:
         self._config = config
         self._ref_image = ref_image
-
-    def flush(self) -> None:
-        if self._pending and not self._closed.is_set():
-            batch = list(self._pending)
-            self._pending.clear()
-            self._in_queue.put(batch)
 
     def close(self) -> None:
         if self._closed.is_set():

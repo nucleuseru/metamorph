@@ -8,7 +8,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from fastapi import Depends, HTTPException, Request
-from jwt.exceptions import InvalidTokenError
+from jwt.exceptions import InvalidTokenError, PyJWKClientError, PyJWKError
 from pydantic import BaseModel
 
 from metamorph_engine.config import EngineSettings
@@ -49,17 +49,24 @@ def _load_ed25519_key(pem: str) -> Ed25519PublicKey | None:
 class JWTAuthenticator:
     """Verifies EdDSA JWTs against instance identity, user binding, and modalities."""
 
-    def __init__(self, settings: EngineSettings) -> None:
+    def __init__(
+        self,
+        settings: EngineSettings,
+        *,
+        jwk_client: jwt.PyJWKClient | None = None,
+    ) -> None:
         self._settings = settings
         self._public_key: Ed25519PublicKey | None = _load_ed25519_key(
             settings.normalized_jwt_public_key
         )
+        self._jwk_client: jwt.PyJWKClient | None = jwk_client
+        if self._jwk_client is None and settings.jwt_jwks_url:
+            self._jwk_client = jwt.PyJWKClient(
+                settings.jwt_jwks_url,
+                cache_keys=True,
+                lifespan=settings.jwt_jwks_cache_ttl_s,
+            )
         self._bound_user_id: str | None = settings.user_id
-
-    @property
-    def bound_user_id(self) -> str | None:
-        """Return the user_id this dedicated instance is locked to, if known."""
-        return self._bound_user_id
 
     @staticmethod
     def extract_bearer(authorization: str | None) -> str | None:
@@ -73,10 +80,12 @@ class JWTAuthenticator:
 
     def verify_token(self, token: str) -> JWTClaims:
         """Decode and validate an EdDSA JWT, returning parsed `JWTClaims`."""
-        if self._public_key is None:
-            raise AuthError(401, 4001, "JWT public key is not configured on this instance.")
+        if self._jwk_client is None and self._public_key is None:
+            raise AuthError(401, 4001, "JWT verification is not configured on this instance.")
         if not token or not token.strip():
             raise AuthError(401, 4001, "Missing JWT token.")
+        token = token.strip()
+        signing_key = self._resolve_signing_key(token)
 
         required = ["sub", "exp"] if self._settings.enforce_token_expiry else ["sub"]
         decode_kwargs: dict[str, Any] = {
@@ -87,13 +96,17 @@ class JWTAuthenticator:
                 "verify_exp": self._settings.enforce_token_expiry,
             },
         }
-        if self._settings.instance_id:
+        if self._settings.jwt_audience:
+            decode_kwargs["audience"] = self._settings.jwt_audience
+        elif self._jwk_client is None and self._settings.instance_id:
             decode_kwargs["audience"] = self._settings.instance_id
+        else:
+            decode_kwargs["options"]["verify_aud"] = False
         if self._settings.jwt_issuer:
             decode_kwargs["issuer"] = self._settings.jwt_issuer
 
         try:
-            payload = jwt.decode(token.strip(), key=self._public_key, **decode_kwargs)
+            payload = jwt.decode(token, key=signing_key, **decode_kwargs)
         except InvalidTokenError as exc:
             raise AuthError(401, 4001, f"Invalid JWT: {exc}") from exc
 
@@ -126,6 +139,15 @@ class JWTAuthenticator:
             jti=str(payload["jti"]) if payload.get("jti") is not None else None,
             modalities=modalities,
         )
+
+    def _resolve_signing_key(self, token: str) -> Any:
+        """Pick the verification key: JWKS (by `kid`) when configured, else static PEM."""
+        if self._jwk_client is None:
+            return self._public_key
+        try:
+            return self._jwk_client.get_signing_key_from_jwt(token).key
+        except (PyJWKClientError, PyJWKError, InvalidTokenError) as exc:
+            raise AuthError(401, 4001, f"Invalid JWT: {exc}") from exc
 
     def _validate_modalities(self, raw_modalities: object) -> tuple[Modality, ...]:
         enabled = set(self._settings.enabled_modalities)

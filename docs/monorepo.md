@@ -11,7 +11,11 @@ Configured in `pnpm-workspace.yaml`:
 - `apps/*`
 - `packages/*`
 
-TypeScript packages extend `tsconfig.base.json` and live under `packages/` or `apps/`. Workspace packages use the `@metamorph/*` scope (e.g., `@metamorph/shared` in `packages/shared-ts`).
+TypeScript packages extend `tsconfig.base.json` and live under `packages/` or `apps/`. Workspace packages use the `@metamorph/*` scope:
+
+- `@metamorph/shared` (`packages/shared-ts`) — Isomorphic 16-byte `!BBHIQ` binary wire protocol and shared Effect Schemas for engine/API communication
+- `@metamorph/orchestrator` (`packages/orchestrator`) — Effect v4 GPU instance orchestrator (`RunPod`, `Vast.ai`, `local`), hardware sizing, engine HTTP client, webhooks, and reconciler
+- `@metamorph/email` (`packages/email`) — React Email templates for verification and password resets
 
 ### Python (`uv`)
 

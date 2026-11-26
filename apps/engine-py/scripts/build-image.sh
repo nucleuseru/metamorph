@@ -14,7 +14,6 @@ BUILD_FP8=1
 INSTALL_SAGE_ATTN=1
 SAGE_CUDA_ARCH_LIST="12.0"
 INSTALL_FA4=0
-GPTQMODEL_WHEEL_URL=""
 PUSH=0
 DRY_RUN=0
 
@@ -33,7 +32,6 @@ Options:
   --no-sage-attn                 Skip building SageAttention 2.2.0
   --sage-archs <list>            SageAttention arch list (default: 12.0)
   --fa4                          Install flash-attn-4 (recommended for B200)
-  --gptq-wheel <url>             Optional GPTQModel wheel URL for local Qwen PE
   --push                         Push image after building
   --dry-run                      Print build command without executing
   -h, --help                     Show this help
@@ -52,7 +50,6 @@ while [ "$#" -gt 0 ]; do
         --no-sage-attn) INSTALL_SAGE_ATTN=0; shift ;;
         --sage-archs) SAGE_CUDA_ARCH_LIST="$2"; shift 2 ;;
         --fa4) INSTALL_FA4=1; shift ;;
-        --gptq-wheel) GPTQMODEL_WHEEL_URL="$2"; shift 2 ;;
         --push) PUSH=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -97,7 +94,6 @@ if [ "$TARGET" = "full" ]; then
         --build-arg "INSTALL_SAGE_ATTN=${INSTALL_SAGE_ATTN}"
         --build-arg "SAGE_CUDA_ARCH_LIST=${SAGE_CUDA_ARCH_LIST}"
         --build-arg "INSTALL_FA4=${INSTALL_FA4}"
-        --build-arg "GPTQMODEL_WHEEL_URL=${GPTQMODEL_WHEEL_URL}"
     )
 fi
 

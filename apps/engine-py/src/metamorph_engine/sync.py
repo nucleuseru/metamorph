@@ -213,23 +213,6 @@ class AVSyncCoordinator:
             video_hold_ms=round(self._last_hold_s[Track.VIDEO] * 1000.0, 2),
         )
 
-    def reset(self) -> None:
-        """Clear clock estimation and pending queued frames."""
-        self._clock_offset_s = None
-        self._last_ingress_s.clear()
-        self._track_latency_s = {Track.VIDEO: 0.0, Track.AUDIO: 0.0}
-        self._has_latency = {Track.VIDEO: False, Track.AUDIO: False}
-        self._last_hold_s = {Track.VIDEO: 0.0, Track.AUDIO: 0.0}
-        self._heap.clear()
-        self._wakeup.set()
-
-    def mark_track_paused(self, track: Track) -> None:
-        """Mark a track temporarily gated/paused so the peer track emits without sync hold."""
-        if track in self._last_ingress_s:
-            del self._last_ingress_s[track]
-            self._last_hold_s[track] = 0.0
-            self._wakeup.set()
-
     async def close(self) -> None:
         """Stop the pacer task and drop buffered items."""
         self._closed = True

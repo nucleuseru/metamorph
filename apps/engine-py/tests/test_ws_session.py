@@ -179,13 +179,13 @@ def test_video_only_pod_rv2v_and_hot_swap() -> None:
         assert frames[0][0].pts_us == 33_333
         assert bytes(frames[0][1])[:3] == b"\xff\xd8\xff"
 
-        # Hot-swap prompt and switch to H.264 output via WS update_config
+        # Hot-swap prompt and clear ref image via WS update_config
         ws.send_json(
             {
                 "type": "update_config",
                 "prompt": "Swap into cyberpunk armor",
                 "clear_ref_image": True,
-                "video": {"enabled": True, "input_codec": "mjpeg", "output_codec": "h264"},
+                "video": {"enabled": True, "input_codec": "mjpeg", "output_codec": "mjpeg"},
             }
         )
         updated = ws.receive_json()
@@ -200,10 +200,10 @@ def test_video_only_pod_rv2v_and_hot_swap() -> None:
         ws.send_bytes(
             pack_frame(Track.VIDEO, VideoCodec.MJPEG, seq=3, pts_us=100_000, payload=frame_jpg)
         )
-        h264_frames, _ = _receive_binary_until(ws, count=2)
-        assert [f[0].pts_us for f in h264_frames] == [66_666, 100_000]
-        assert h264_frames[0][0].codec == VideoCodec.H264_ANNEXB
-        assert bytes(h264_frames[0][1]).startswith(b"\x00\x00\x00\x01")
+        mjpeg_frames, _ = _receive_binary_until(ws, count=2)
+        assert [f[0].pts_us for f in mjpeg_frames] == [66_666, 100_000]
+        assert mjpeg_frames[0][0].codec == VideoCodec.MJPEG
+        assert bytes(mjpeg_frames[0][1])[:3] == b"\xff\xd8\xff"
 
 
 def test_dual_modality_hybrid_bootstrap_and_synced_stream() -> None:
@@ -249,10 +249,10 @@ def test_dual_modality_hybrid_bootstrap_and_synced_stream() -> None:
             ws.send_json(
                 {
                     "type": "start",
-                    "video": {"enabled": True, "input_codec": "h264", "output_codec": "h264"},
+                    "video": {"enabled": True, "input_codec": "mjpeg", "output_codec": "mjpeg"},
                     "audio": {
                         "enabled": True,
-                        "input_codec": "pcm_f32le",
+                        "input_codec": "pcm_s16le",
                         "output_codec": "pcm_s16le",
                     },
                 }
@@ -269,30 +269,27 @@ def test_dual_modality_hybrid_bootstrap_and_synced_stream() -> None:
             assert pong["t"] == 1234.5
 
             # Stream interleaved video + audio frames
-            import numpy as np
-
-            t = np.arange(22050 // 4, dtype=np.float32) / 22050.0
-            pcm_f32 = (0.5 * np.sin(2.0 * np.pi * 440.0 * t)).astype("<f4").tobytes()
-            h264_au = b"\x00\x00\x00\x01\x65mock-annexb"
+            pcm_s16 = make_pcm16_chunk(freq_hz=440.0, duration_s=0.25, sr=22050, amplitude=0.5)
+            mjpeg_frame = make_jpeg_bytes(width=64, height=48, color=(120, 80, 200))
 
             ws.send_bytes(
                 pack_frame(
-                    Track.VIDEO, VideoCodec.H264_ANNEXB, seq=1, pts_us=100_000, payload=h264_au
+                    Track.VIDEO, VideoCodec.MJPEG, seq=1, pts_us=100_000, payload=mjpeg_frame
                 )
             )
             ws.send_bytes(
                 pack_frame(
-                    Track.AUDIO, AudioCodec.PCM_F32LE, seq=1, pts_us=100_000, payload=pcm_f32
+                    Track.AUDIO, AudioCodec.PCM_S16LE, seq=1, pts_us=100_000, payload=pcm_s16
                 )
             )
             ws.send_bytes(
                 pack_frame(
-                    Track.VIDEO, VideoCodec.H264_ANNEXB, seq=2, pts_us=350_000, payload=h264_au
+                    Track.VIDEO, VideoCodec.MJPEG, seq=2, pts_us=350_000, payload=mjpeg_frame
                 )
             )
             ws.send_bytes(
                 pack_frame(
-                    Track.AUDIO, AudioCodec.PCM_F32LE, seq=2, pts_us=350_000, payload=pcm_f32
+                    Track.AUDIO, AudioCodec.PCM_S16LE, seq=2, pts_us=350_000, payload=pcm_s16
                 )
             )
 

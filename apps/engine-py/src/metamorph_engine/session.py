@@ -362,8 +362,6 @@ class ActiveStreamSession:
                 )
                 if gate_evt is None or gate_evt.frame_accepted:
                     self._sync.note_ingress(Track.VIDEO, frame.pts_us, now_s=ingress_s)
-                elif gate_evt.event_type in ("waiting_face", "no_person", "session_reset"):
-                    self._sync.mark_track_paused(Track.VIDEO)
 
                 if gate_evt is not None and gate_evt.emit and not self._closed:
                     await self._send_json_cb(
@@ -541,51 +539,15 @@ class EngineSessionManager:
             num_inference_steps=self._settings.video_num_inference_steps,
             seed=self._settings.video_seed,
             output_quality=self._settings.video_output_quality,
-            detection_mode=self._settings.video_detection_mode,
-            use_pe=self._settings.video_pe_backend != "none",
             freeze_kv_on_static=self._settings.video_freeze_kv_on_static,
             static_diff_thresh=self._settings.video_static_diff_thresh,
-            kv_reset_frames=self._settings.video_kv_reset_frames,
             max_temporal_ids=self._settings.video_max_temporal_ids,
         )
-        merged = self._staged_video_override
-        for cfg in (merged, override):
+        for cfg in (self._staged_video_override, override):
             if cfg is None:
                 continue
-            base = replace(
-                base,
-                input_codec=cfg.input_codec,
-                output_codec=cfg.output_codec,
-                width=cfg.width if cfg.width is not None else base.width,
-                height=cfg.height if cfg.height is not None else base.height,
-                fps=cfg.fps if cfg.fps is not None else base.fps,
-                num_inference_steps=(
-                    cfg.num_inference_steps
-                    if cfg.num_inference_steps is not None
-                    else base.num_inference_steps
-                ),
-                seed=cfg.seed if cfg.seed is not None else base.seed,
-                output_quality=(
-                    cfg.output_quality if cfg.output_quality is not None else base.output_quality
-                ),
-                detection_mode=(
-                    cfg.detection_mode if cfg.detection_mode is not None else base.detection_mode
-                ),
-                use_pe=cfg.use_pe if cfg.use_pe is not None else base.use_pe,
-                freeze_kv_on_static=(
-                    cfg.freeze_kv_on_static
-                    if cfg.freeze_kv_on_static is not None
-                    else base.freeze_kv_on_static
-                ),
-                static_diff_thresh=(
-                    cfg.static_diff_thresh
-                    if cfg.static_diff_thresh is not None
-                    else base.static_diff_thresh
-                ),
-                kv_reset_frames=(
-                    cfg.kv_reset_frames if cfg.kv_reset_frames is not None else base.kv_reset_frames
-                ),
-            )
+            updates = cfg.model_dump(exclude_none=True, exclude={"enabled"})
+            base = replace(base, **updates)
         return base
 
     def _build_audio_config(self, override: AudioStartConfig | None) -> AudioSessionConfig:
@@ -600,26 +562,12 @@ class EngineSessionManager:
         for cfg in (self._staged_audio_override, override):
             if cfg is None:
                 continue
-            base = replace(
-                base,
-                input_codec=audio_codec_from_name(cfg.input_codec),
-                output_codec=audio_codec_from_name(cfg.output_codec),
-                input_sample_rate=cfg.input_sample_rate,
-                output_sample_rate=cfg.output_sample_rate,
-                diffusion_steps=(
-                    cfg.diffusion_steps if cfg.diffusion_steps is not None else base.diffusion_steps
-                ),
-                cfg_rate=cfg.cfg_rate if cfg.cfg_rate is not None else base.cfg_rate,
-                block_time_s=(
-                    cfg.block_time_s if cfg.block_time_s is not None else base.block_time_s
-                ),
-                vad_threshold_db=(
-                    cfg.vad_threshold_db
-                    if cfg.vad_threshold_db is not None
-                    else base.vad_threshold_db
-                ),
-                passthrough=cfg.passthrough,
-            )
+            updates = cfg.model_dump(exclude_none=True, exclude={"enabled"})
+            if "input_codec" in updates:
+                updates["input_codec"] = audio_codec_from_name(updates["input_codec"])
+            if "output_codec" in updates:
+                updates["output_codec"] = audio_codec_from_name(updates["output_codec"])
+            base = replace(base, **updates)
         return base
 
     async def apply_config_patch(

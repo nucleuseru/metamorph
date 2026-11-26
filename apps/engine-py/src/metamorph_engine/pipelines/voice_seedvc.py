@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.util
 import sys
@@ -23,7 +24,7 @@ from metamorph_engine.pipelines.base import (
     encode_pcm_bytes,
     resample_audio_linear,
 )
-from metamorph_engine.protocol import FrameFlags
+from metamorph_engine.protocol import AudioCodec, FrameFlags
 
 
 def _ensure_dac_importable() -> None:
@@ -100,7 +101,6 @@ class _LoadedSeedVC:
         vocoder_fn: Any,
         campplus_model: Any,
         to_mel: Any,
-        vad_model: Any | None,
     ) -> None:
         self.torch = torch_mod
         self.torchaudio = torchaudio_mod
@@ -114,7 +114,6 @@ class _LoadedSeedVC:
         self.vocoder_fn = vocoder_fn
         self.campplus_model = campplus_model
         self.to_mel = to_mel
-        self.vad_model = vad_model
 
 
 class SeedVCVoiceSession(VoiceSession):
@@ -134,12 +133,6 @@ class SeedVCVoiceSession(VoiceSession):
             adaptive_noise_floor=pipeline.settings.voice_vad_adaptive_noise_floor,
             noise_margin_db=pipeline.settings.voice_vad_noise_margin_db,
         )
-        self._vad_cache: dict[str, Any] = {}
-        self._vad_speech_active = False
-        self._vad_deactivate_after_block = False
-        self._silero_hangover_s = 0.0
-        if self._loaded.vad_model is not None and hasattr(self._loaded.vad_model, "reset_states"):
-            self._loaded.vad_model.reset_states()
 
         self._out_seq = 0
         self._pending_in = np.zeros(0, dtype=np.float32)
@@ -246,50 +239,8 @@ class SeedVCVoiceSession(VoiceSession):
         )
 
     def _check_speech(self, block_model_sr: np.ndarray) -> bool:
-        backend = self._pipeline.settings.voice_vad_backend
-        if backend == "none":
+        if self._pipeline.settings.voice_vad_backend == "none":
             return True
-        if backend == "silero" and self._loaded.vad_model is not None:
-            audio_16k = resample_audio_linear(block_model_sr, self._sr, 16000)
-            win_len = 512
-            max_prob = 0.0
-            with self._torch.no_grad():
-                for start in range(0, max(1, audio_16k.shape[0]), win_len):
-                    seg = audio_16k[start : start + win_len]
-                    if seg.shape[0] < win_len:
-                        seg = np.pad(seg, (0, win_len - seg.shape[0]))
-                    prob = float(self._loaded.vad_model(self._torch.from_numpy(seg), 16000).item())
-                    if prob > max_prob:
-                        max_prob = prob
-            chunk_s = block_model_sr.shape[0] / float(self._sr)
-            if max_prob >= self._pipeline.settings.voice_vad_silero_threshold:
-                self._silero_hangover_s = self._pipeline.settings.voice_vad_hangover_s
-                return True
-            if self._silero_hangover_s >= 0.5 * chunk_s and self._silero_hangover_s > 0.0:
-                self._silero_hangover_s = max(0.0, self._silero_hangover_s - chunk_s)
-                return True
-            self._silero_hangover_s = 0.0
-            return False
-        if backend == "fsmn" and self._loaded.vad_model is not None:
-            if self._vad_deactivate_after_block:
-                self._vad_speech_active = False
-                self._vad_deactivate_after_block = False
-            audio_16k = resample_audio_linear(block_model_sr, self._sr, 16000)
-            chunk_ms = min(500.0, 1000.0 * self._block_frame / float(self._sr))
-            res = self._loaded.vad_model.generate(
-                input=audio_16k,
-                cache=self._vad_cache,
-                is_final=False,
-                chunk_size=chunk_ms,
-            )
-            values = res[0]["value"]
-            if len(values) % 2 == 1:
-                if not self._vad_speech_active:
-                    self._vad_speech_active = True
-                else:
-                    # Keep the final trailing speech block active, then turn off on the next block
-                    self._vad_deactivate_after_block = True
-            return self._vad_speech_active
         return self._vad.is_speech(block_model_sr, self._sr)
 
     def push_audio(self, chunk: AudioChunkIn) -> list[AudioChunkOut]:
@@ -332,7 +283,7 @@ class SeedVCVoiceSession(VoiceSession):
             stream_ctx = (
                 torch.cuda.stream(self._pipeline.cuda_stream)
                 if self._pipeline.cuda_stream is not None
-                else _NullContext()
+                else contextlib.nullcontext()
             )
             with stream_ctx:
                 self._input_wav[: -self._block_frame] = self._input_wav[self._block_frame :].clone()
@@ -416,42 +367,8 @@ class SeedVCVoiceSession(VoiceSession):
     def update_reference_audio(self, audio_f32: np.ndarray, sample_rate: int) -> None:
         self._pipeline.set_reference_audio(audio_f32, sample_rate)
 
-    def flush(self) -> list[AudioChunkOut]:
-        if self._pending_in.size == 0:
-            return []
-        pad = np.zeros(self._block_frame - self._pending_in.shape[0], dtype=np.float32)
-        block = np.concatenate([self._pending_in, pad])
-        pts_us = self._pending_start_pts_us or 0
-        self._pending_in = np.zeros(0, dtype=np.float32)
-        self._pending_start_pts_us = None
-        out = self._process_block(block, pts_us)
-        return [
-            AudioChunkOut(
-                payload=out.payload,
-                codec=out.codec,
-                sample_rate=out.sample_rate,
-                seq=out.seq,
-                pts_us=out.pts_us,
-                flags=out.flags | FrameFlags.END_OF_CHUNK,
-            )
-        ]
-
     def close(self) -> None:
         self._pending_in = np.zeros(0, dtype=np.float32)
-        self._vad_cache.clear()
-        self._vad_speech_active = False
-        self._vad_deactivate_after_block = False
-        self._silero_hangover_s = 0.0
-        if self._loaded.vad_model is not None and hasattr(self._loaded.vad_model, "reset_states"):
-            self._loaded.vad_model.reset_states()
-
-
-class _NullContext:
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, *args: object) -> None:
-        return None
 
 
 class SeedVCVoicePipeline(VoicePipeline):
@@ -563,94 +480,52 @@ class SeedVCVoicePipeline(VoicePipeline):
         campplus_model.eval()
         campplus_model.to(device)
 
-        # Vocoder (HiFT for real-time v1 preset, or BigVGAN if custom checkpoint specifies it)
+        # Vocoder (HiFT for real-time v1 preset)
         vocoder_type = model_params.vocoder.type
-        if vocoder_type == "hifigan":
-            hifigan_gen_mod = importlib.import_module("modules.hifigan.generator")
-            hifigan_f0_mod = importlib.import_module("modules.hifigan.f0_predictor")
-            hift_cfg_path = seed_vc_dir / "configs" / "hifigan.yml"
-            with open(hift_cfg_path, encoding="utf-8") as fh:
-                hift_config = yaml.safe_load(fh)
-            hift_gen = hifigan_gen_mod.HiFTGenerator(
-                **hift_config["hift"],
-                f0_predictor=hifigan_f0_mod.ConvRNNF0Predictor(**hift_config["f0_predictor"]),
-            )
-            hift_path = hf_hub.hf_hub_download(
-                repo_id="FunAudioLLM/CosyVoice-300M",
-                filename="hift.pt",
-                cache_dir=cache_dir,
-            )
-            hift_gen.load_state_dict(_torch_load_compat(torch, hift_path))
-            hift_gen.eval()
-            hift_gen.to(device)
-            vocoder_fn = hift_gen
-        elif vocoder_type == "bigvgan":
-            bigvgan_mod = importlib.import_module("modules.bigvgan.bigvgan")
-            bigvgan_model = bigvgan_mod.BigVGAN.from_pretrained(
-                model_params.vocoder.name, use_cuda_kernel=False
-            )
-            bigvgan_model.remove_weight_norm()
-            vocoder_fn = bigvgan_model.eval().to(device)
-        else:
+        if vocoder_type != "hifigan":
             raise ValueError(f"Unsupported Seed-VC vocoder type: {vocoder_type}")
+        hifigan_gen_mod = importlib.import_module("modules.hifigan.generator")
+        hifigan_f0_mod = importlib.import_module("modules.hifigan.f0_predictor")
+        hift_cfg_path = seed_vc_dir / "configs" / "hifigan.yml"
+        with open(hift_cfg_path, encoding="utf-8") as fh:
+            hift_config = yaml.safe_load(fh)
+        hift_gen = hifigan_gen_mod.HiFTGenerator(
+            **hift_config["hift"],
+            f0_predictor=hifigan_f0_mod.ConvRNNF0Predictor(**hift_config["f0_predictor"]),
+        )
+        hift_path = hf_hub.hf_hub_download(
+            repo_id="FunAudioLLM/CosyVoice-300M",
+            filename="hift.pt",
+            cache_dir=cache_dir,
+        )
+        hift_gen.load_state_dict(_torch_load_compat(torch, hift_path))
+        hift_gen.eval()
+        hift_gen.to(device)
+        vocoder_fn = hift_gen
 
         # Speech tokenizer (XLSR for real-time tiny preset)
         tokenizer_type = model_params.speech_tokenizer.type
-        if tokenizer_type == "xlsr":
-            model_name = config["model_params"]["speech_tokenizer"]["name"]
-            output_layer = config["model_params"]["speech_tokenizer"]["output_layer"]
-            feat_ext = transformers.Wav2Vec2FeatureExtractor.from_pretrained(model_name)
-            w2v = transformers.Wav2Vec2Model.from_pretrained(model_name)
-            w2v.encoder.layers = w2v.encoder.layers[:output_layer]
-            w2v = w2v.to(device).eval().half()
-
-            def semantic_fn(waves_16k: Any) -> Any:
-                inputs_list = [waves_16k[idx].cpu().numpy() for idx in range(len(waves_16k))]
-                inputs = feat_ext(
-                    inputs_list,
-                    return_tensors="pt",
-                    return_attention_mask=True,
-                    padding=True,
-                    sampling_rate=16000,
-                ).to(device)
-                with torch.no_grad():
-                    outputs = w2v(inputs.input_values.half())
-                return outputs.last_hidden_state.float()
-
-        elif tokenizer_type == "whisper":
-            whisper_name = model_params.speech_tokenizer.name
-            try:
-                whisper_model = transformers.WhisperModel.from_pretrained(
-                    whisper_name, dtype=torch.float16
-                ).to(device)
-            except TypeError:
-                whisper_model = transformers.WhisperModel.from_pretrained(
-                    whisper_name, torch_dtype=torch.float16
-                ).to(device)
-            del whisper_model.decoder
-            whisper_ext = transformers.AutoFeatureExtractor.from_pretrained(whisper_name)
-
-            def semantic_fn(waves_16k: Any) -> Any:
-                inputs = whisper_ext(
-                    [waves_16k.squeeze(0).cpu().numpy()],
-                    return_tensors="pt",
-                    return_attention_mask=True,
-                )
-                feats = whisper_model._mask_input_features(
-                    inputs.input_features, attention_mask=inputs.attention_mask
-                ).to(device)
-                with torch.no_grad():
-                    out = whisper_model.encoder(
-                        feats.to(whisper_model.encoder.dtype),
-                        output_attentions=False,
-                        output_hidden_states=False,
-                        return_dict=True,
-                    )
-                s_ori = out.last_hidden_state.to(torch.float32)
-                return s_ori[:, : waves_16k.size(-1) // 320 + 1]
-
-        else:
+        if tokenizer_type != "xlsr":
             raise ValueError(f"Unsupported Seed-VC speech tokenizer: {tokenizer_type}")
+        model_name = config["model_params"]["speech_tokenizer"]["name"]
+        output_layer = config["model_params"]["speech_tokenizer"]["output_layer"]
+        feat_ext = transformers.Wav2Vec2FeatureExtractor.from_pretrained(model_name)
+        w2v = transformers.Wav2Vec2Model.from_pretrained(model_name)
+        w2v.encoder.layers = w2v.encoder.layers[:output_layer]
+        w2v = w2v.to(device).eval().half()
+
+        def semantic_fn(waves_16k: Any) -> Any:
+            inputs_list = [waves_16k[idx].cpu().numpy() for idx in range(len(waves_16k))]
+            inputs = feat_ext(
+                inputs_list,
+                return_tensors="pt",
+                return_attention_mask=True,
+                padding=True,
+                sampling_rate=16000,
+            ).to(device)
+            with torch.no_grad():
+                outputs = w2v(inputs.input_values.half())
+            return outputs.last_hidden_state.float()
 
         spect_cfg = config["preprocess_params"]["spect_params"]
         mel_fn_args = {
@@ -667,17 +542,6 @@ class SeedVCVoicePipeline(VoicePipeline):
         def to_mel(x: Any) -> Any:
             return audio_mod.mel_spectrogram(x, **mel_fn_args)
 
-        vad_model: Any | None = None
-        if self.settings.voice_vad_backend == "fsmn":
-            funasr = importlib.import_module("funasr")
-            vad_model = funasr.AutoModel(model="fsmn-vad", model_revision="v2.0.4")
-        elif self.settings.voice_vad_backend == "silero":
-            try:
-                silero_mod = importlib.import_module("silero_vad")
-                vad_model = silero_mod.load_silero_vad()
-            except Exception:
-                vad_model = None
-
         self._loaded = _LoadedSeedVC(
             torch_mod=torch,
             torchaudio_mod=torchaudio,
@@ -691,7 +555,6 @@ class SeedVCVoicePipeline(VoicePipeline):
             vocoder_fn=vocoder_fn,
             campplus_model=campplus_model,
             to_mel=to_mel,
-            vad_model=vad_model,
         )
 
         # Warmup pass with synthetic reference + non-silent source audio so full DiT/HiFT compiles
@@ -708,7 +571,7 @@ class SeedVCVoicePipeline(VoicePipeline):
                 AudioChunkIn(
                     samples=dummy_blk,
                     sample_rate=sr,
-                    codec=self._default_codec(),
+                    codec=AudioCodec.PCM_S16LE,
                     seq=1,
                     pts_us=0,
                 )
@@ -718,12 +581,6 @@ class SeedVCVoicePipeline(VoicePipeline):
             self._prompt_condition = None
             self._mel2 = None
             self._style2 = None
-
-    @staticmethod
-    def _default_codec():
-        from metamorph_engine.protocol import AudioCodec
-
-        return AudioCodec.PCM_S16LE
 
     def set_reference_audio(self, audio_f32: np.ndarray, sample_rate: int) -> None:
         loaded = self.require_loaded()

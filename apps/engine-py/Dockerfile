@@ -90,7 +90,6 @@ RUN uv sync --frozen --no-dev --package metamorph-engine \
         pyyaml>=6.0.2 \
         scipy>=1.13.0 \
         soundfile>=0.12.1 \
-        "silero-vad>=5.1.2" \
         transformers==4.46.3
 
 COPY vendor/seed-vc ./vendor/seed-vc
@@ -126,7 +125,6 @@ ARG INSTALL_SAGE_ATTN=1
 ARG SAGE_CUDA_ARCH_LIST="12.0"
 ARG SAGE_EXT_PARALLEL=1
 ARG INSTALL_FA4=0
-ARG GPTQMODEL_WHEEL_URL=""
 ARG MAX_JOBS=8
 
 COPY --from=uv-bin /uv /uvx /usr/local/bin/
@@ -181,7 +179,6 @@ RUN uv sync --frozen --no-dev --package metamorph-engine \
         pyyaml>=6.0.2 \
         scipy>=1.13.0 \
         soundfile>=0.12.1 \
-        "silero-vad>=5.1.2" \
         "librosa>=0.11.0" \
         ninja==1.13.0 \
         packaging \
@@ -228,28 +225,6 @@ RUN if [ "${INSTALL_FA4}" = "1" ]; then \
             nvidia-cutlass-dsl==4.5.1 \
             quack-kernels==0.4.1 \
             apache-tvm-ffi==0.1.12; \
-    fi
-
-# Optional local Qwen3.6-27B GPTQ prompt enhancement wheel
-RUN if [ -n "${GPTQMODEL_WHEEL_URL}" ]; then \
-        apt-get update && apt-get install -y --no-install-recommends libpcre2-dev \
-        && rm -rf /var/lib/apt/lists/* \
-        && uv pip install --python /app/.venv/bin/python --no-cache \
-            --extra-index-url https://download.pytorch.org/whl/cu128 \
-            --index-strategy unsafe-best-match \
-            kernels==0.17.2 \
-            defuser==0.0.18 \
-            torchao==0.16.0 \
-            device-smi==0.5.2 \
-            logbar==0.4.1 \
-            tokenicer==0.0.12 \
-            pypcre==0.2.14 \
-            threadpoolctl==3.6.0 \
-            datasets==3.6.0 \
-            pyarrow==21.0.0 \
-            dill==0.3.8 \
-            multiprocess==0.70.16 \
-            "${GPTQMODEL_WHEEL_URL}"; \
     fi
 
 # ==============================================================================

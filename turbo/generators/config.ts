@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+
 import type { PlopTypes } from "@turbo/gen";
 
 const KEBAB_NAME_REGEX = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;

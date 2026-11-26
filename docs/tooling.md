@@ -10,8 +10,9 @@ This repository prioritizes Rust/native tooling over legacy JS/Python tools for 
 | Lint      | `oxlint`     | `.oxlintrc.json`     | `pnpm lint:ts`                     |
 | Typecheck | `tsc` (TS 7) | `tsconfig.base.json` | `pnpm typecheck:ts`                |
 
-- `oxlint` enables `typescript`, `unicorn`, and `oxc` plugins with `correctness: "error"` and `suspicious: "warn"`.
-- Both `.oxlintrc.json` and `.oxfmtrc.json` ignore `.venv/**`, `dist/**`, `build/**`, `.turbo/**`, `node_modules/**`, `vendor/**`, and `.agents/**` (`**/.agents/**`).
+- `oxfmt` enables `sortImports` and `sortTailwindcss` (`functions: ["cn", "cva"]`), with an override scoping `stylesheet: "./apps/web/src/app/globals.css"` to `apps/web/**`.
+- `oxlint` enables `typescript`, `unicorn`, and `oxc` plugins with `correctness: "error"` and `suspicious: "warn"`, plus `react` and `jsx-a11y` overrides for `packages/email`, and `react`, `jsx-a11y`, and `nextjs` overrides for `apps/web` (with `settings.next.rootDir: "apps/web"`).
+- Both `.oxlintrc.json` and `.oxfmtrc.json` ignore `.venv/**`, `dist/**` (`**/dist/**`), `build/**`, `.turbo/**`, `**/.react-email/**`, `node_modules/**`, `vendor/**`, and `.agents/**` (`**/.agents/**`).
 
 ## Python
 

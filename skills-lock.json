@@ -1,6 +1,62 @@
 {
   "version": 2,
   "skills": {
+    "cargo-fallow": {
+      "source": "fallow-rs/fallow-skills",
+      "commit": "062821c68ddc5377feb7b543ebc922e526f7e96f",
+      "sourceType": "github",
+      "skillPath": "fallow/skills/cargo-fallow/SKILL.md",
+      "computedHash": "62b30c838c569cfb0f2b728ab97d62f2d8f06b154ced0e2fc17635bc483ef7d8"
+    },
+    "effect-ts": {
+      "source": "Effect-TS/skills",
+      "commit": "155c50c911f9c99c294ef8a4461981c5bbe6453e",
+      "sourceType": "github",
+      "skillPath": "skills/effect-ts/SKILL.md",
+      "computedHash": "0e5d926566561f7fe206f5f60c1c53e21d1519fd6de8408a7e3c9934d55ad04f"
+    },
+    "fallow": {
+      "source": "fallow-rs/fallow-skills",
+      "commit": "062821c68ddc5377feb7b543ebc922e526f7e96f",
+      "sourceType": "github",
+      "skillPath": "fallow/skills/fallow/SKILL.md",
+      "computedHash": "824828beddb7d5afb26d56ed7235e21017db90775bf0a03e994165d8f7c824fc"
+    },
+    "fallow-cloud-setup": {
+      "source": "fallow-rs/fallow-skills",
+      "commit": "062821c68ddc5377feb7b543ebc922e526f7e96f",
+      "sourceType": "github",
+      "skillPath": "fallow/skills/fallow-cloud-setup/SKILL.md",
+      "computedHash": "02d0b4780d09d44c5672a15ee9c06b97ddd546e96c20dbba995e7523df2ad2a0"
+    },
+    "fallow-codex-onboarding": {
+      "source": "fallow-rs/fallow-skills",
+      "commit": "062821c68ddc5377feb7b543ebc922e526f7e96f",
+      "sourceType": "github",
+      "skillPath": "fallow/skills/fallow-codex-onboarding/SKILL.md",
+      "computedHash": "d2d7a02d2022198226bc3a10c167a7a70280f7264987ab436eabc65b3c52e79b"
+    },
+    "fallow-mutation": {
+      "source": "fallow-rs/fallow-skills",
+      "commit": "062821c68ddc5377feb7b543ebc922e526f7e96f",
+      "sourceType": "github",
+      "skillPath": "fallow/skills/fallow-mutation/SKILL.md",
+      "computedHash": "7f6232bd4bf09b62877b5fe07570b63623d30b20608520c0ead761ef79b9b6d4"
+    },
+    "fallow-review": {
+      "source": "fallow-rs/fallow-skills",
+      "commit": "062821c68ddc5377feb7b543ebc922e526f7e96f",
+      "sourceType": "github",
+      "skillPath": "fallow/skills/fallow-review/SKILL.md",
+      "computedHash": "d7225ed4328b573e01d570a8bbee519a611e667d4833f300dcce45bc4eba8724"
+    },
+    "fallow-setup": {
+      "source": "fallow-rs/fallow-skills",
+      "commit": "062821c68ddc5377feb7b543ebc922e526f7e96f",
+      "sourceType": "github",
+      "skillPath": "fallow/skills/fallow-setup/SKILL.md",
+      "computedHash": "e05f8e661e97b33f81ee92ef3d7ad6cbfbb997daf7cb5c0e2b2c2d49110e7afe"
+    },
     "turborepo": {
       "source": "vercel/turborepo",
       "commit": "b911d19d45f60c96cb33c756b6e238ad4d32bb73",

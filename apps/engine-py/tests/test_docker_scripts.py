@@ -4,11 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
-
-from metamorph_engine.auth import JWTAuthenticator
-from metamorph_engine.config import EngineSettings
 
 ENGINE_DIR = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ENGINE_DIR / "docker" / "entrypoint.sh"
@@ -17,7 +13,6 @@ ALL_SHELL_SCRIPTS = [
     ENTRYPOINT,
     SCRIPTS_DIR / "build-image.sh",
     SCRIPTS_DIR / "download_models.sh",
-    SCRIPTS_DIR / "gen-jwt-keys.sh",
 ]
 
 
@@ -68,62 +63,6 @@ def test_entrypoint_resolves_volume_paths_and_respects_overrides(tmp_path: Path)
     )
     parsed2 = dict(line.split("=", 1) for line in res2.stdout.strip().splitlines() if "=" in line)
     assert parsed2["ENGINE_VIDEO_DIT_CKPT"] == custom_dit
-
-
-def test_gen_jwt_keys_and_mint_token_integrate_with_authenticator(tmp_path: Path) -> None:
-    env = {**os.environ, "PYTHON_BIN": sys.executable}
-    gen_res = subprocess.run(
-        [str(SCRIPTS_DIR / "gen-jwt-keys.sh"), "--out-dir", str(tmp_path)],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    priv_path = tmp_path / "private_ed25519.pem"
-    pub_path = tmp_path / "public_ed25519.pem"
-    assert priv_path.is_file()
-    assert pub_path.is_file()
-    assert "ENGINE_JWT_PUBLIC_KEY=" in gen_res.stdout
-
-    # Extract escaped ENGINE_JWT_PUBLIC_KEY line
-    pub_escaped = ""
-    for line in gen_res.stdout.splitlines():
-        if line.startswith("ENGINE_JWT_PUBLIC_KEY="):
-            pub_escaped = line.split("=", 1)[1].strip('"')
-            break
-    assert "\\n" in pub_escaped
-
-    token_res = subprocess.run(
-        [
-            str(SCRIPTS_DIR / "gen-jwt-keys.sh"),
-            "--mint-token",
-            "--private-key",
-            str(priv_path),
-            "--user-id",
-            "usr-42",
-            "--instance-id",
-            "inst-99",
-            "--modalities",
-            "voice,video",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    token = token_res.stdout.strip()
-
-    settings = EngineSettings(
-        backend="mock",
-        instance_id="inst-99",
-        user_id="usr-42",
-        jwt_public_key=pub_escaped,
-    )
-    auth = JWTAuthenticator(settings)
-    claims = auth.verify_token(token)
-    assert claims.sub == "usr-42"
-    assert claims.aud == "inst-99"
-    assert claims.modalities == ("voice", "video")
 
 
 def test_build_image_dry_run_command() -> None:
@@ -207,7 +146,6 @@ def test_github_workflow_builds_and_deploys_all_targets() -> None:
         "librosa>=0.11.0",
         "numpy==2.2.6",
         "pillow==12.2.0",
-        "silero-vad>=5.1.2",
         "ENGINE_ASYNC_STARTUP=true",
     ):
         assert expected in docker_content, f"Dockerfile missing expected line: {expected}"
@@ -238,10 +176,6 @@ def test_download_models_dry_run_covers_entrypoint_checkpoints(tmp_path: Path) -
         "jdopensource/JoyAI-Video-Edit",
         "joyai_video_edit_dit_1101_face++.pth",
         "XiaomiMiMo/MiMo-VL-7B-RL-2508",
-        "btbtyler09/Qwen3.6-27B-GPTQ-4bit",
-        "face_detection_yunet_2023mar.onnx",
-        "yolov8n.onnx",
-        "imgsz=320, opset=12",
     ):
         assert expected in out, f"download_models.sh missing expected asset: {expected}"
 

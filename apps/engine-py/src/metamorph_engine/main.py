@@ -121,7 +121,7 @@ def run() -> None:
         application,
         host=settings.host,
         port=settings.port,
-        workers=settings.workers,
+        workers=1,
         loop="uvloop",
         http="httptools",
         ws="websockets",

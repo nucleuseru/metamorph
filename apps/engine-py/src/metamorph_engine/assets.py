@@ -16,30 +16,11 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from metamorph_engine.config import EngineSettings
+from metamorph_engine.pipelines.base import resample_audio_linear
 
 
 class AssetError(ValueError):
     """Raised when a reference image or audio asset is invalid or fails to load."""
-
-
-def _linear_resample(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
-    """Resample 1D float32 audio using scipy/librosa when available, else linear interp."""
-    if orig_sr == target_sr or audio.size == 0:
-        return audio.astype(np.float32, copy=False)
-    try:
-        scipy_signal = importlib.import_module("scipy.signal")
-        from math import gcd
-
-        divisor = gcd(orig_sr, target_sr)
-        up = target_sr // divisor
-        down = orig_sr // divisor
-        return scipy_signal.resample_poly(audio, up, down).astype(np.float32, copy=False)
-    except Exception:
-        pass
-    out_len = max(1, round(len(audio) * target_sr / orig_sr))
-    x_old = np.linspace(0.0, 1.0, num=len(audio), endpoint=False)
-    x_new = np.linspace(0.0, 1.0, num=out_len, endpoint=False)
-    return np.interp(x_new, x_old, audio).astype(np.float32)
 
 
 def _decode_wav_bytes_stdlib(data: bytes) -> tuple[np.ndarray, int]:
@@ -87,26 +68,14 @@ def _decode_audio_sync(data: bytes, target_sr: int) -> np.ndarray:
     if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
         try:
             audio, sr = _decode_wav_bytes_stdlib(data)
-            return _linear_resample(audio, sr, target_sr)
+            return resample_audio_linear(audio, sr, target_sr)
         except wave.Error:
             pass
 
-    # Optional soundfile path (handles float WAV, FLAC, OGG)
-    try:
-        soundfile = importlib.import_module("soundfile")
-        audio, sr = soundfile.read(io.BytesIO(data), dtype="float32", always_2d=True)
-        mono = audio.mean(axis=1).astype(np.float32, copy=False)
-        return _linear_resample(mono, int(sr), target_sr)
-    except ModuleNotFoundError:
-        pass
-    except Exception:
-        pass
-
-    # Optional PyAV path (handles MP3, AAC, M4A, Opus, WebM)
+    # PyAV path (handles MP3, FLAC, OGG, AAC, M4A, Opus, WebM)
     try:
         av = importlib.import_module("av")
         chunks: list[np.ndarray] = []
-        sr = target_sr
         with av.open(io.BytesIO(data)) as container:
             audio_streams = [s for s in container.streams if s.type == "audio"]
             if not audio_streams:
@@ -124,18 +93,8 @@ def _decode_audio_sync(data: bytes, target_sr: int) -> np.ndarray:
         if not chunks:
             raise AssetError("Decoded reference audio is empty.")
         return np.clip(np.concatenate(chunks), -1.0, 1.0).astype(np.float32, copy=False)
-    except ModuleNotFoundError:
-        pass
     except AssetError:
         raise
-    except Exception as exc:
-        raise AssetError(f"Failed to decode reference audio via PyAV: {exc}") from exc
-
-    # Last fallback: librosa
-    try:
-        librosa = importlib.import_module("librosa")
-        mono, _ = librosa.load(io.BytesIO(data), sr=target_sr, mono=True)
-        return np.clip(mono, -1.0, 1.0).astype(np.float32, copy=False)
     except Exception as exc:
         raise AssetError(f"Unable to decode reference audio bytes: {exc}") from exc
 

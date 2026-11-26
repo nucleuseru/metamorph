@@ -14,9 +14,8 @@ HEADER_STRUCT = struct.Struct("!BBHIQ")
 HEADER_SIZE = HEADER_STRUCT.size  # 16 bytes
 
 Modality = Literal["voice", "video"]
-VideoCodecName = Literal["h264", "mjpeg"]
-AudioCodecName = Literal["pcm_s16le", "pcm_f32le"]
-DetectionMode = Literal["off", "near", "full"]
+VideoCodecName = Literal["mjpeg"]
+AudioCodecName = Literal["pcm_s16le"]
 
 
 class Track(IntEnum):
@@ -29,7 +28,6 @@ class Track(IntEnum):
 class VideoCodec(IntEnum):
     """Video payload encoding carried over binary frames."""
 
-    H264_ANNEXB = 1
     MJPEG = 2
 
 
@@ -37,7 +35,6 @@ class AudioCodec(IntEnum):
     """Audio payload encoding carried over binary frames."""
 
     PCM_S16LE = 1
-    PCM_F32LE = 2
 
 
 class FrameFlags(IntFlag):
@@ -130,31 +127,28 @@ def unpack_frame(data: bytes | bytearray | memoryview) -> tuple[MediaFrameHeader
 
 def video_codec_from_name(name: VideoCodecName) -> VideoCodec:
     """Map string video codec name to enum."""
-    return VideoCodec.H264_ANNEXB if name == "h264" else VideoCodec.MJPEG
+    return VideoCodec.MJPEG
 
 
 def audio_codec_from_name(name: AudioCodecName) -> AudioCodec:
     """Map string audio codec name to enum."""
-    return AudioCodec.PCM_S16LE if name == "pcm_s16le" else AudioCodec.PCM_F32LE
+    return AudioCodec.PCM_S16LE
 
 
 class VideoStartConfig(BaseModel):
     """Per-session video pipeline parameters."""
 
     enabled: bool = True
-    input_codec: VideoCodecName = "h264"
-    output_codec: VideoCodecName = "h264"
+    input_codec: VideoCodecName = "mjpeg"
+    output_codec: VideoCodecName = "mjpeg"
     width: int | None = Field(default=None, ge=64, le=4096)
     height: int | None = Field(default=None, ge=64, le=4096)
     fps: int | None = Field(default=None, ge=1, le=120)
     num_inference_steps: int | None = Field(default=None, ge=1, le=50)
     seed: int | None = None
     output_quality: int | None = Field(default=None, ge=1, le=100)
-    detection_mode: DetectionMode | None = None
-    use_pe: bool | None = None
     freeze_kv_on_static: bool | None = None
     static_diff_thresh: float | None = Field(default=None, ge=0.0)
-    kv_reset_frames: int | None = Field(default=None, ge=0)
 
 
 class AudioStartConfig(BaseModel):

@@ -17,13 +17,17 @@
     "typecheck": "pnpm typecheck:ts && pnpm typecheck:py",
     "typecheck:ts": "turbo run typecheck",
     "typecheck:py": "uv run ty check",
-    "test": "turbo run test"
+    "test": "turbo run test",
+    "prepare": "effect-tsgo patch --typescript --oxlint"
   },
   "devDependencies": {
+    "@effect/language-service": "^0.87.5",
+    "@effect/tsgo": "0.73.4",
     "@turbo/gen": "^2.11.13",
     "@types/node": "^26.6.6",
     "oxfmt": "^0.79.0",
-    "oxlint": "^1.94.0",
+    "oxlint": "1.94.0",
+    "oxlint-tsgolint": "7.0.2008",
     "turbo": "^2.11.13",
     "typescript": "^7.0.2"
   },

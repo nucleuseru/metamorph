@@ -2,7 +2,7 @@
 
 `metamorph-engine` (`apps/engine-py`) is the low-latency single-user Python GPU inference server deployed to dedicated GPU instances. It hosts:
 
-- **Real-time voice cloning** (`vendor/seed-vc` v1 real-time model + SOLA crossfade + RMS/FSMN VAD)
+- **Real-time voice cloning** (`vendor/seed-vc` v1 real-time model + SOLA crossfade + RMS VAD)
 - **Full-body swap & RV2V / V2V video editing** (`vendor/JoyAI-Video-Edit` streaming DiT + xVAE pipeline)
 - **Adaptive A/V synchronization** aligning voice and video emission using microsecond capture PTS
 
@@ -11,7 +11,6 @@
 - **Framework & Server**: FastAPI + `uvicorn` (`uvloop`, `httptools`, `websockets`)
 - **Configuration**: `pydantic-settings` (`EngineSettings` in [`config.py`](../apps/engine-py/src/metamorph_engine/config.py))
 - **Authentication**: Asymmetric **EdDSA (Ed25519)** JWT verification (`JWTAuthenticator` in [`auth.py`](../apps/engine-py/src/metamorph_engine/auth.py))
-- **Workspace Dependencies**: `metamorph-shared` (`packages/shared-py`)
 
 ## Endpoints
 
@@ -39,26 +38,31 @@ Single multiplexed WebSocket connection carrying both JSON control messages and 
 
 #### 16-Byte Binary Media Frame Header (`!BBHIQ`, Big-Endian)
 
-| Offset | Size | Field         | Description                                                                                                                                  |
-| :----- | :--- | :------------ | :------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`    | `1`  | `version`     | Protocol version (`1`)                                                                                                                       |
-| `1`    | `1`  | `track_codec` | High nibble: Track (`1`=Video, `2`=Audio). Low nibble: Video (`1`=H.264 Annex-B, `2`=MJPEG) or Audio (`1`=PCM16 LE mono, `2`=PCM32F LE mono) |
-| `2`    | `2`  | `flags`       | Bitmask: `0x0001`=KEYFRAME, `0x0002`=END_OF_CHUNK, `0x0004`=SILENCE, `0x0008`=PASSTHROUGH, `0x0010`=SPEECH_ACTIVE                            |
-| `4`    | `4`  | `seq`         | Monotonic frame/chunk sequence number (`uint32`)                                                                                             |
-| `8`    | `8`  | `pts_us`      | Capture presentation timestamp in microseconds (`uint64`)                                                                                    |
-| `16`   | `N`  | `payload`     | Raw media payload (H.264 Annex-B AU, JPEG bytes, or PCM samples)                                                                             |
+| Offset | Size | Field         | Description                                                                                                       |
+| :----- | :--- | :------------ | :---------------------------------------------------------------------------------------------------------------- |
+| `0`    | `1`  | `version`     | Protocol version (`1`)                                                                                            |
+| `1`    | `1`  | `track_codec` | High nibble: Track (`1`=Video, `2`=Audio). Low nibble: Video (`2`=MJPEG) or Audio (`1`=PCM16 LE mono)             |
+| `2`    | `2`  | `flags`       | Bitmask: `0x0001`=KEYFRAME, `0x0002`=END_OF_CHUNK, `0x0004`=SILENCE, `0x0008`=PASSTHROUGH, `0x0010`=SPEECH_ACTIVE |
+| `4`    | `4`  | `seq`         | Monotonic frame/chunk sequence number (`uint32`)                                                                  |
+| `8`    | `8`  | `pts_us`      | Capture presentation timestamp in microseconds (`uint64`)                                                         |
+| `16`   | `N`  | `payload`     | Raw media payload (JPEG bytes or PCM16 LE samples)                                                                |
 
 #### Control Messages (JSON Text Frames)
 
 - **Client -> Server**: `auth`, `auth_refresh`, `start` (optional `prompt`, `ref_image_*`, `ref_audio_*`, `video`, `audio`), `update_config`, `ping`, `stop`.
-- **Server -> Client**: `auth_ok`, `started`, `config_updated`, `pong`, `sync_stats`, `waiting_face`, `no_person`, `editing`, `session_superseded`, `stopped`, `error`.
+- **Server -> Client**: `auth_ok`, `started`, `config_updated`, `pong`, `sync_stats`, `dropped`, `session_superseded`, `stopped`, `error`.
 
 ## JWT Claims Contract (`apps/api` -> `apps/engine-py`)
 
-Tokens must be signed with **EdDSA (Ed25519)** using the private key held by `apps/api`:
+Tokens are **EdDSA (Ed25519)** JWTs issued by `apps/api` (Better Auth `jwt()` plugin, `GET /api/auth/token`). The engine verifies them with either:
+
+- **JWKS (recommended)**: `ENGINE_JWT_JWKS_URL` (e.g. `https://api.example.com/api/auth/jwks`); keys are selected by `kid` and cached for `ENGINE_JWT_JWKS_CACHE_TTL_S` (default `300`).
+- **Static key**: `ENGINE_JWT_PUBLIC_KEY` (Ed25519 PEM), used when no JWKS URL is configured.
+
+Claims:
 
 - `sub` (`string`, required): User ID; verified against `ENGINE_USER_ID` (or bound to the first user in dev).
-- `aud` (`string`, required when `ENGINE_INSTANCE_ID` is set): Target instance `instance_id`.
+- `aud` (`string`): Verified against `ENGINE_JWT_AUDIENCE` when set; otherwise against `ENGINE_INSTANCE_ID` for static-key tokens. Not checked for JWKS tokens when `ENGINE_JWT_AUDIENCE` is unset.
 - `iss` (`string`, optional): Verified when `ENGINE_JWT_ISSUER` is configured.
 - `exp` (`number`, required): Expiration timestamp (checked on HTTP, WS auth, and mid-session).
 - `modalities` (`("voice" | "video")[]`, optional): Defaults to enabled instance modalities; any requested modality not enabled on the instance returns `403` / WS `4003`.
@@ -95,7 +99,6 @@ Always build from the **repository root** (use [`build-image.sh`](../apps/engine
 ./apps/engine-py/scripts/build-image.sh --image ghcr.io/your-org/metamorph-engine --target voice --push
 
 # Local CPU mock dev via Docker Compose
-./apps/engine-py/scripts/gen-jwt-keys.sh --out-dir ./tmp-keys
 docker compose -f apps/engine-py/docker-compose.yml up --build engine-mock
 ```
 
@@ -110,9 +113,6 @@ Weights and per-GPU Triton/TorchInductor compile caches are mounted externally a
 │   │   ├── dit/joyai_video_edit_dit_1101_face++.pth
 │   │   └── vae/{config.json, diffusion_pytorch_model.safetensors}
 │   ├── MiMo-VL-7B-RL-2508/
-│   ├── Qwen3.6-27B-GPTQ-Int4-FOEM/      # optional local PE
-│   ├── face_detection_yunet_2023mar.onnx
-│   ├── yolov8n.onnx                     # optional full-body gate (320x320)
 │   └── seed-vc/
 ├── hf_cache/
 ├── torch_cache/
@@ -151,20 +151,20 @@ Populate a volume once using [`download_models.sh`](../apps/engine-py/scripts/do
 
 ## Key Configuration (`ENGINE_*`)
 
-| Variable                                                        | Default                   | Description                                     |
-| :-------------------------------------------------------------- | :------------------------ | :---------------------------------------------- |
-| `ENGINE_HOST` / `ENGINE_PORT`                                   | `0.0.0.0` / `8000`        | Bind address and port                           |
-| `ENGINE_INSTANCE_ID` / `ENGINE_USER_ID`                         | `local-instance` / `None` | Dedicated instance and user binding             |
-| `ENGINE_ENABLE_VOICE` / `ENGINE_ENABLE_VIDEO`                   | `true` / `true`           | Modalities loaded at boot                       |
-| `ENGINE_BACKEND`                                                | `gpu`                     | `gpu` (Seed-VC + JoyAI) or `mock` (CPU testing) |
-| `ENGINE_JWT_PUBLIC_KEY` / `ENGINE_JWT_ISSUER`                   | `""` / `None`             | Ed25519 PEM public key and expected issuer      |
-| `ENGINE_STARTUP_IDLE_TIMEOUT_S` / `ENGINE_DISCONNECT_TIMEOUT_S` | `120.0` / `30.0`          | Idle and disconnect shutdown timeouts           |
-| `ENGINE_LIFECYCLE_WEBHOOK_URL` / `_SECRET`                      | `None`                    | Signed lifecycle webhook destination            |
-| `ENGINE_INITIAL_PROMPT` / `_REF_IMAGE_URL` / `_REF_AUDIO_URL`   | `None`                    | Startup reference asset bootstrap               |
-| `ENGINE_VIDEO_WIDTH` / `_HEIGHT` / `_FPS`                       | `840` / `480` / `24`      | Video streaming resolution and FPS              |
-| `ENGINE_VIDEO_PE_BACKEND` / `ENGINE_VIDEO_DETECTION_MODE`       | `none` / `off`            | Optional prompt enhancement and presence gate   |
-| `ENGINE_VOICE_SAMPLE_RATE` / `_VAD_BACKEND`                     | `22050` / `rms`           | Seed-VC sample rate and VAD mode                |
-| `ENGINE_AV_SYNC_ENABLED` / `_MAX_HOLD_S`                        | `true` / `1.0`            | Adaptive dual-modality A/V sync controls        |
+| Variable                                                            | Default                   | Description                                                   |
+| :------------------------------------------------------------------ | :------------------------ | :------------------------------------------------------------ |
+| `ENGINE_HOST` / `ENGINE_PORT`                                       | `0.0.0.0` / `8000`        | Bind address and port                                         |
+| `ENGINE_INSTANCE_ID` / `ENGINE_USER_ID`                             | `local-instance` / `None` | Dedicated instance and user binding                           |
+| `ENGINE_ENABLE_VOICE` / `ENGINE_ENABLE_VIDEO`                       | `true` / `true`           | Modalities loaded at boot                                     |
+| `ENGINE_BACKEND`                                                    | `gpu`                     | `gpu` (Seed-VC + JoyAI) or `mock` (CPU testing)               |
+| `ENGINE_JWT_PUBLIC_KEY` / `ENGINE_JWT_ISSUER`                       | `""` / `None`             | Static Ed25519 PEM public key and expected issuer             |
+| `ENGINE_JWT_JWKS_URL` / `_JWKS_CACHE_TTL_S` / `ENGINE_JWT_AUDIENCE` | `None` / `300` / `None`   | JWKS endpoint (Better Auth), key cache TTL, expected audience |
+| `ENGINE_STARTUP_IDLE_TIMEOUT_S` / `ENGINE_DISCONNECT_TIMEOUT_S`     | `120.0` / `30.0`          | Idle and disconnect shutdown timeouts                         |
+| `ENGINE_LIFECYCLE_WEBHOOK_URL` / `_SECRET`                          | `None`                    | Signed lifecycle webhook destination                          |
+| `ENGINE_INITIAL_PROMPT` / `_REF_IMAGE_URL` / `_REF_AUDIO_URL`       | `None`                    | Startup reference asset bootstrap                             |
+| `ENGINE_VIDEO_WIDTH` / `_HEIGHT` / `_FPS`                           | `840` / `480` / `24`      | Video streaming resolution and FPS                            |
+| `ENGINE_VOICE_SAMPLE_RATE` / `_VAD_BACKEND`                         | `22050` / `rms`           | Seed-VC sample rate and VAD mode (`rms` or `none`)            |
+| `ENGINE_AV_SYNC_ENABLED` / `_MAX_HOLD_S`                            | `true` / `1.0`            | Adaptive dual-modality A/V sync controls                      |
 
 ## Commands
 

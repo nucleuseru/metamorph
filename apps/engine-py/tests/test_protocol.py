@@ -16,10 +16,10 @@ from metamorph_engine.protocol import (
 
 
 def test_pack_unpack_video_roundtrip() -> None:
-    payload = b"\x00\x00\x00\x01\x65frame"
+    payload = b"\xff\xd8\xff\xe0jpeg"
     wire = pack_frame(
         Track.VIDEO,
-        VideoCodec.H264_ANNEXB,
+        VideoCodec.MJPEG,
         seq=42,
         pts_us=1_234_567_890,
         payload=payload,
@@ -30,7 +30,7 @@ def test_pack_unpack_video_roundtrip() -> None:
     header, view = unpack_frame(wire)
     assert header.version == 1
     assert header.track == Track.VIDEO
-    assert header.codec == VideoCodec.H264_ANNEXB
+    assert header.codec == VideoCodec.MJPEG
     assert header.flags == (FrameFlags.KEYFRAME | FrameFlags.END_OF_CHUNK)
     assert header.seq == 42
     assert header.pts_us == 1_234_567_890
@@ -41,7 +41,7 @@ def test_pack_unpack_audio_roundtrip() -> None:
     payload = b"\x01\x02\x03\x04" * 16
     wire = pack_frame(
         Track.AUDIO,
-        AudioCodec.PCM_F32LE,
+        AudioCodec.PCM_S16LE,
         seq=99,
         pts_us=500_000,
         payload=memoryview(payload),
@@ -49,7 +49,7 @@ def test_pack_unpack_audio_roundtrip() -> None:
     )
     header, view = unpack_frame(wire)
     assert header.track == Track.AUDIO
-    assert header.codec == AudioCodec.PCM_F32LE
+    assert header.codec == AudioCodec.PCM_S16LE
     assert header.flags == FrameFlags.SPEECH_ACTIVE
     assert header.seq == 99
     assert header.pts_us == 500_000

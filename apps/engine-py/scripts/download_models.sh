@@ -4,8 +4,6 @@ set -euo pipefail
 DEST="${JOYOMNI_CKPT_ROOT:-${MODEL_VOLUME_DIR:-/models}/checkpoints}"
 WANT_VOICE=0
 WANT_VIDEO=0
-WANT_PE=0
-WANT_DETECTORS=0
 FORCE=0
 DRY_RUN=0
 
@@ -19,9 +17,7 @@ Options:
   --dest <dir>      Checkpoint root (default: $MODEL_VOLUME_DIR/checkpoints or /models/checkpoints)
   --voice           Download Seed-VC v1 real-time checkpoints (XLSR, DiT, HiFT)
   --video           Download JoyAI-Video-Edit DiT, xVAE, and MiMo-VL weights
-  --pe              Download local Qwen3.6-27B GPTQ INT4 Prompt Enhancement weights
-  --detectors       Download YuNet face detector + export YOLOv8n (320x320) person detector ONNX
-  --all             Download voice, video, PE, and detectors
+  --all             Download voice and video checkpoints
   --force           Re-download even if destination files already exist
   --dry-run         Print download actions without executing
   -h, --help        Show this help
@@ -33,9 +29,7 @@ while [ "$#" -gt 0 ]; do
         --dest) DEST="$2"; shift 2 ;;
         --voice) WANT_VOICE=1; shift ;;
         --video) WANT_VIDEO=1; shift ;;
-        --pe) WANT_PE=1; shift ;;
-        --detectors) WANT_DETECTORS=1; shift ;;
-        --all) WANT_VOICE=1; WANT_VIDEO=1; WANT_PE=1; WANT_DETECTORS=1; shift ;;
+        --all) WANT_VOICE=1; WANT_VIDEO=1; shift ;;
         --force) FORCE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -43,7 +37,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-if [ "$WANT_VOICE" = "0" ] && [ "$WANT_VIDEO" = "0" ] && [ "$WANT_PE" = "0" ] && [ "$WANT_DETECTORS" = "0" ]; then
+if [ "$WANT_VOICE" = "0" ] && [ "$WANT_VIDEO" = "0" ]; then
     WANT_VOICE=1
     WANT_VIDEO=1
 fi
@@ -132,36 +126,6 @@ if [ "$WANT_VIDEO" = "1" ]; then
         hf_download_repo "XiaomiMiMo/MiMo-VL-7B-RL-2508" "$MIMO_DIR"
     else
         echo "[download_models] MiMo-VL already present at $MIMO_DIR"
-    fi
-fi
-
-if [ "$WANT_PE" = "1" ]; then
-    PE_DIR="$DEST/Qwen3.6-27B-GPTQ-Int4-FOEM"
-    if [ "$FORCE" = "1" ] || [ ! -d "$PE_DIR" ] || [ -z "$(ls -A "$PE_DIR" 2>/dev/null || true)" ]; then
-        echo "[download_models] Downloading Qwen3.6-27B GPTQ INT4 PE -> $PE_DIR"
-        hf_download_repo "btbtyler09/Qwen3.6-27B-GPTQ-4bit" "$PE_DIR" "bcfe8a7ec20eec6ce67ded4669819ae77e73af3a"
-    else
-        echo "[download_models] Qwen PE already present at $PE_DIR"
-    fi
-fi
-
-if [ "$WANT_DETECTORS" = "1" ]; then
-    YUNET_PATH="$DEST/face_detection_yunet_2023mar.onnx"
-    if [ "$FORCE" = "1" ] || [ ! -f "$YUNET_PATH" ]; then
-        echo "[download_models] Downloading YuNet face detector -> $YUNET_PATH"
-        run_or_echo curl -fsSL -o "$YUNET_PATH" \
-            "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
-    else
-        echo "[download_models] YuNet already present at $YUNET_PATH"
-    fi
-
-    YOLO_PATH="$DEST/yolov8n.onnx"
-    if [ "$FORCE" = "1" ] || [ ! -f "$YOLO_PATH" ]; then
-        echo "[download_models] Exporting YOLOv8n (imgsz=320, opset=12) -> $YOLO_PATH"
-        export_cmd="tmpdir=\"\$(mktemp -d)\" && trap 'rm -rf \"\$tmpdir\"' EXIT && uv venv \"\$tmpdir/venv\" && uv pip install --python \"\$tmpdir/venv/bin/python\" --no-cache --extra-index-url https://download.pytorch.org/whl/cpu torch torchvision ultralytics onnx onnxslim && { uv pip uninstall --python \"\$tmpdir/venv/bin/python\" opencv-python || true; } && uv pip install --python \"\$tmpdir/venv/bin/python\" --no-cache opencv-python-headless && (cd \"\$tmpdir\" && \"\$tmpdir/venv/bin/python\" -c \"from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx', imgsz=320, opset=12)\") && mv \"\$tmpdir/yolov8n.onnx\" \"$YOLO_PATH\""
-        run_or_echo bash -c "$export_cmd"
-    else
-        echo "[download_models] YOLOv8n already present at $YOLO_PATH"
     fi
 fi
 

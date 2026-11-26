@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "skills": {
+    "aws-cdk": {
+      "source": "aws/agent-toolkit-for-aws",
+      "commit": "1e9bf89382d46cb833588a1d3d28ef8959358666",
+      "sourceType": "github",
+      "skillPath": "skills/core-skills/aws-cdk/SKILL.md",
+      "computedHash": "631d26e2b13db93300dfb32686945ca489593619663e532763e309961ec5fe23"
+    }
+  }
+}

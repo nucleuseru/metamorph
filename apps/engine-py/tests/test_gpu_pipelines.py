@@ -86,8 +86,6 @@ def test_joyai_vendor_contract_matches_wrapper() -> None:
 
     streaming_ast = _parse_ast(serving_dir / "joyomni_streaming.py")
     serve_ast = _parse_ast(serving_dir / "serve_joyomni_streaming.py")
-    pe_ast = _parse_ast(serving_dir / "pe.py")
-    pe_qwen_ast = _parse_ast(serving_dir / "pe_qwen.py")
 
     settings_cls = _ast_class(streaming_ast, "StreamingSettings")
     assert {
@@ -121,37 +119,10 @@ def test_joyai_vendor_contract_matches_wrapper() -> None:
     )
     assert "timeout" in _arg_names(_ast_func(session_cls, "wait_async_result"))
     _ast_func(session_cls, "inflight_chunks")
-    _ast_func(session_cls, "flush_pending")
     _ast_func(session_cls, "request_stop")
     assert "timeout" in _arg_names(_ast_func(session_cls, "close"))
 
     _ast_func(serve_ast, "_snap_to_align")
-    _ast_func(serve_ast, "_detect_gate_faces")
-    _ast_func(serve_ast, "_face_present_from")
-    _ast_func(serve_ast, "_face_center_from")
-    _ast_func(serve_ast, "_person_present")
-    _ast_func(_ast_class(serve_ast, "_H264Ingest"), "decode_one")
-    _ast_func(_ast_class(serve_ast, "_H264Stream"), "encode")
-    assert {"onnx_path", "score_thresh", "min_below_ratio"}.issubset(
-        _arg_names(_ast_func(serve_ast, "_check_face_gate"))
-    )
-    assert {"face_center", "onnx_path", "conf"}.issubset(
-        _arg_names(_ast_func(serve_ast, "_check_full_body_gate"))
-    )
-    assert {
-        "raw_prompt",
-        "pe_frame",
-        "pe_model",
-        "timeout",
-        "ref_image",
-        "backend",
-        "pipeline",
-        "inference_lock",
-        "task_type",
-    }.issubset(_arg_names(_ast_func(serve_ast, "_enhance_prompt")))
-
-    _ast_func(pe_ast, "pe_available")
-    _ast_class(pe_qwen_ast, "QwenRuntime")
 
 
 def test_seedvc_vendor_contract_matches_wrapper() -> None:
@@ -196,7 +167,6 @@ def test_joyai_pipeline_warmup_session_codecs_gates_backpressure_and_hotswap(
 
     load_calls: list[dict[str, Any]] = []
     created_sessions: list[Any] = []
-    gate_state: dict[str, Any] = {"face": None, "body": None}
 
     @dataclass(frozen=True)
     class _StreamingSettings:
@@ -289,49 +259,8 @@ def test_joyai_pipeline_warmup_session_codecs_gates_backpressure_and_hotswap(
         ) -> _FakeInnerSession:
             return _FakeInnerSession(prompt, settings, ref_image)
 
-    class _FakeH264Ingest:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def decode_one(self, au: bytes) -> Image.Image | None:
-            self.calls += 1
-            return Image.new("RGB", (64, 48), color=(10, 20, 30))
-
-    class _FakeH264Stream:
-        def __init__(self, quality: int) -> None:
-            self.quality = quality
-
-        def encode(self, frames: list[Any]) -> list[tuple[bytes, bool]]:
-            return [
-                (b"\x00\x00\x00\x01h264-" + bytes([idx]), idx == 0) for idx, _ in enumerate(frames)
-            ]
-
     def _snap_to_align(val: int, align: int) -> int:
         return max(align, (val + align // 2) // align * align)
-
-    def _check_face_gate(image: Image.Image, **kwargs: Any):
-        reason = gate_state["face"]
-        return reason, ((0.5, 0.4, 0.25) if reason is None else None), (0 if reason else 1)
-
-    def _check_full_body_gate(image: Image.Image, **kwargs: Any):
-        return gate_state["body"]
-
-    def _detect_gate_faces(image: Image.Image, **kwargs: Any):
-        if gate_state["face"] is not None:
-            return [], float(image.width), float(image.height)
-        return [(16.0, 12.0, 20.0, 20.0)], float(image.width), float(image.height)
-
-    def _face_present_from(faces: Any, *_args: Any, **_kw: Any) -> bool:
-        return bool(faces)
-
-    def _face_center_from(faces: Any, *_args: Any, **_kw: Any):
-        return (0.5, 0.4, 0.25) if faces else None
-
-    def _person_present(image: Image.Image, **_kw: Any) -> bool:
-        return gate_state["body"] is None
-
-    async def _enhance_prompt(**kwargs: Any) -> dict[str, Any]:
-        return {"enhanced_prompt": f"ENHANCED: {kwargs['raw_prompt']}"}
 
     fake_modules = {
         "xvideo": _make_module("xvideo"),
@@ -348,19 +277,6 @@ def test_joyai_pipeline_warmup_session_codecs_gates_backpressure_and_hotswap(
         "xvideo.serving.serve_joyomni_streaming": _make_module(
             "xvideo.serving.serve_joyomni_streaming",
             _snap_to_align=_snap_to_align,
-            _H264Ingest=_FakeH264Ingest,
-            _H264Stream=_FakeH264Stream,
-            _check_face_gate=_check_face_gate,
-            _check_full_body_gate=_check_full_body_gate,
-            _detect_gate_faces=_detect_gate_faces,
-            _face_present_from=_face_present_from,
-            _face_center_from=_face_center_from,
-            _person_present=_person_present,
-            _enhance_prompt=_enhance_prompt,
-        ),
-        "xvideo.serving.pe": _make_module(
-            "xvideo.serving.pe",
-            pe_available=lambda backend: backend != "none",
         ),
     }
     for mod_name, mod_obj in fake_modules.items():
@@ -371,9 +287,7 @@ def test_joyai_pipeline_warmup_session_codecs_gates_backpressure_and_hotswap(
         enable_voice=False,
         enable_video=True,
         warmup_on_startup=True,
-        video_pe_backend="api",
         video_max_inflight_chunks=2,
-        video_face_stable_frames=1,
     )
     pipe = JoyAIVideoPipeline(settings)
     pipe.warmup()
@@ -388,63 +302,37 @@ def test_joyai_pipeline_warmup_session_codecs_gates_backpressure_and_hotswap(
         output_codec="mjpeg",
         width=841,
         height=479,
-        detection_mode="full",
-        use_pe=True,
     )
     sess = pipe.create_session(cfg, ref_img)
     assert isinstance(sess, JoyAIVideoSession)
     inner1 = created_sessions[-1]
-    assert inner1.prompt == "ENHANCED: Wear silver armor"
+    assert inner1.prompt == "Wear silver armor"
     # stride=2 -> align=16 -> 841 snaps to 848, 479 snaps to 480
     assert inner1.settings.width == 848
     assert inner1.settings.height == 480
 
-    # Presence gates: waiting_face then no_person
     buf = io.BytesIO()
     Image.new("RGB", (64, 48), color=(0, 255, 0)).save(buf, format="JPEG")
     jpg_bytes = buf.getvalue()
 
-    gate_state["face"] = "no_face"
-    evt1 = sess.push_frame(
-        VideoFrameIn(jpg_bytes, VideoCodec.MJPEG, seq=1, pts_us=100_000, flags=FrameFlags.NONE)
-    )
-    assert evt1 is not None and evt1.event_type == "waiting_face" and evt1.frame_accepted is False
-
-    gate_state["face"] = None
-    gate_state["body"] = "full_body_needed"
-    evt2 = sess.push_frame(
-        VideoFrameIn(jpg_bytes, VideoCodec.MJPEG, seq=2, pts_us=140_000, flags=FrameFlags.NONE)
-    )
-    assert evt2 is not None and evt2.event_type == "no_person" and evt2.frame_accepted is False
-
-    # Clear gates + verify backpressure
-    gate_state["body"] = None
+    # Verify backpressure drop
     inner1.inflight = 2
-    evt3 = sess.push_frame(
-        VideoFrameIn(jpg_bytes, VideoCodec.MJPEG, seq=3, pts_us=180_000, flags=FrameFlags.NONE)
+    evt_drop = sess.push_frame(
+        VideoFrameIn(jpg_bytes, VideoCodec.MJPEG, seq=1, pts_us=180_000, flags=FrameFlags.NONE)
     )
-    assert evt3 is not None and evt3.event_type == "dropped" and evt3.reason == "backpressure"
-
-    # Normal push settles on frame 4 (emitting editing) + H.264 Annex-B auto-sniffing
-    inner1.inflight = 0
-    evt4 = sess.push_frame(
-        VideoFrameIn(jpg_bytes, VideoCodec.MJPEG, seq=4, pts_us=200_000, flags=FrameFlags.NONE)
-    )
-    assert evt4 is not None and evt4.event_type == "editing"
-    assert evt4.frame_accepted is True and evt4.emit is True
     assert (
-        sess.push_frame(
-            VideoFrameIn(
-                b"\x00\x00\x00\x01nalu",
-                VideoCodec.H264_ANNEXB,
-                seq=5,
-                pts_us=240_000,
-                flags=FrameFlags.KEYFRAME,
-            )
-        )
-        is None
+        evt_drop is not None
+        and evt_drop.event_type == "dropped"
+        and evt_drop.reason == "backpressure"
     )
-    assert len(inner1.pushed) == 2
+
+    # Normal push
+    inner1.inflight = 0
+    evt_ok = sess.push_frame(
+        VideoFrameIn(jpg_bytes, VideoCodec.MJPEG, seq=2, pts_us=200_000, flags=FrameFlags.NONE)
+    )
+    assert evt_ok is None
+    assert len(inner1.pushed) == 1
     first_meta = inner1.pushed[0][1]
     assert first_meta is not None and first_meta["pts_us"] == 200_000
 
@@ -461,11 +349,9 @@ def test_joyai_pipeline_warmup_session_codecs_gates_backpressure_and_hotswap(
     assert [f.pts_us for f in mjpeg_outs] == [200_000, 240_000]
     assert mjpeg_outs[-1].flags & FrameFlags.END_OF_CHUNK
 
-    # Hot-swap to H.264 output and verify replaced session's "stopped" error is swallowed cleanly
+    # Hot-swap config and verify replaced session's "stopped" error is swallowed cleanly
     sess.update_config(
-        VideoSessionConfig(
-            prompt="Cyberpunk cloak", input_codec="mjpeg", output_codec="h264", use_pe=False
-        ),
+        VideoSessionConfig(prompt="Cyberpunk cloak", input_codec="mjpeg", output_codec="mjpeg"),
         None,
     )
     assert inner1.stopped is True and inner1.closed is True
@@ -488,22 +374,6 @@ def test_joyai_pipeline_warmup_session_codecs_gates_backpressure_and_hotswap(
         sess.poll_outputs(timeout=0.01)
     inner2.raise_on_wait = None
 
-    # H.264 poll_outputs
-    inner2.results.append(
-        _FakeChunkResult(
-            jpegs=[np.zeros((48, 64, 3), dtype=np.uint8), np.ones((48, 64, 3), dtype=np.uint8)],
-            source_metas=[{"pts_us": 300_000}, {"pts_us": 340_000}],
-            valid_count=None,
-        )
-    )
-    h264_outs = sess.poll_outputs(timeout=0.01)
-    assert len(h264_outs) == 2
-    assert h264_outs[0].codec == VideoCodec.H264_ANNEXB
-    assert bool(h264_outs[0].flags & FrameFlags.KEYFRAME) is True
-    assert bool(h264_outs[1].flags & FrameFlags.END_OF_CHUNK) is True
-
-    sess.flush()
-    assert inner2.flushed is True
     sess.close()
     assert inner2.stopped is True and inner2.closed is True
 
@@ -1037,18 +907,5 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
     assert state["hift_autocast_depths"] == [0, 0]
     assert state["hift_dtypes"] == [np.float32, np.float32]
 
-    # Partial flush pads cleanly and sets END_OF_CHUNK
-    sess.push_audio(
-        AudioChunkIn(
-            samples=voiced[:1000],
-            sample_rate=22050,
-            codec=AudioCodec.PCM_S16LE,
-            seq=3,
-            pts_us=480_000,
-        )
-    )
-    flushed = sess.flush()
-    assert len(flushed) == 1
-    assert bool(flushed[0].flags & FrameFlags.END_OF_CHUNK) is True
     sess.close()
     pipe.close()
