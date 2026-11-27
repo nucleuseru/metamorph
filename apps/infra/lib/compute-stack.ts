@@ -139,7 +139,7 @@ export class ComputeStack extends cdk.Stack {
     const serverSgId = serverInstance.connections.securityGroups[0].securityGroupId;
     const dbSgId = props.database.connections.securityGroups[0].securityGroupId;
 
-    allowTcpToTarget(
+    const serverToDbIngress = allowTcpToTarget(
       this,
       "ServerToDatabase",
       serverSgId,
@@ -224,6 +224,7 @@ export class ComputeStack extends cdk.Stack {
     });
 
     deployAssociation.addResourceDependency(eipAssociation);
+    deployAssociation.addResourceDependency(serverToDbIngress);
     const defaultPolicy = serverInstance.role.node.tryFindChild("DefaultPolicy");
     if (defaultPolicy) {
       deployAssociation.node.addDependency(defaultPolicy);
