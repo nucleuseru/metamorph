@@ -57,7 +57,7 @@ on:
       max_jobs:
         description: "Parallel CUDA compiler jobs (full target)"
         type: string
-        default: "2"
+        default: "1"
       push:
         description: "Push built images to Docker Hub"
         type: boolean
@@ -177,6 +177,13 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
           docker system prune -af || true
+          if [ "${{ matrix.target }}" = "full" ] && [ ! -f /swapfile ]; then
+            sudo fallocate -l 8G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+          fi
+          free -h
           df -h
 
       - name: Checkout repository with submodules
@@ -226,7 +233,7 @@ jobs:
             BUILD_FP8=${{ github.event_name == 'workflow_dispatch' && inputs.build_fp8 == false && '0' || '1' }}
             INSTALL_SAGE_ATTN=${{ github.event_name == 'workflow_dispatch' && inputs.install_sage_attn == false && '0' || '1' }}
             INSTALL_FA4=${{ github.event_name == 'workflow_dispatch' && inputs.install_fa4 == true && '1' || '0' }}
-            MAX_JOBS=${{ inputs.max_jobs || '2' }}
+            MAX_JOBS=${{ inputs.max_jobs || '1' }}
 
       - name: Smoke-test mock container
         if: steps.flags.outputs.should_load == 'true'

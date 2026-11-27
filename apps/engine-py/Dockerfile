@@ -24,14 +24,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock .python-version ./
-COPY packages/shared-py ./packages/shared-py
+COPY packages/shared-py/pyproject.toml ./packages/shared-py/pyproject.toml
 COPY apps/engine-py/pyproject.toml ./apps/engine-py/pyproject.toml
+
+RUN uv sync --frozen --no-dev --no-install-workspace --package metamorph-engine
+
+COPY packages/shared-py/src ./packages/shared-py/src
 COPY apps/engine-py/src ./apps/engine-py/src
 COPY apps/engine-py/docker/entrypoint.sh ./docker/entrypoint.sh
 COPY apps/engine-py/scripts/download_models.sh ./scripts/download_models.sh
 
 RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh \
-    && uv sync --frozen --no-dev --package metamorph-engine
+    && uv sync --frozen --no-dev --inexact --package metamorph-engine
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
@@ -72,11 +76,10 @@ WORKDIR /app
 RUN uv python install 3.12
 
 COPY pyproject.toml uv.lock .python-version ./
-COPY packages/shared-py ./packages/shared-py
+COPY packages/shared-py/pyproject.toml ./packages/shared-py/pyproject.toml
 COPY apps/engine-py/pyproject.toml ./apps/engine-py/pyproject.toml
-COPY apps/engine-py/src ./apps/engine-py/src
 
-RUN uv sync --frozen --no-dev --package metamorph-engine \
+RUN uv sync --frozen --no-dev --no-install-workspace --package metamorph-engine \
     && uv pip install --python /app/.venv/bin/python --no-cache \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
         --index-strategy unsafe-best-match \
@@ -92,11 +95,14 @@ RUN uv sync --frozen --no-dev --package metamorph-engine \
         soundfile>=0.12.1 \
         transformers==4.46.3
 
+COPY packages/shared-py/src ./packages/shared-py/src
+COPY apps/engine-py/src ./apps/engine-py/src
 COPY vendor/seed-vc ./vendor/seed-vc
 COPY apps/engine-py/docker/entrypoint.sh ./docker/entrypoint.sh
 COPY apps/engine-py/scripts/download_models.sh ./scripts/download_models.sh
 
 RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh \
+    && uv sync --frozen --no-dev --inexact --package metamorph-engine \
     && mkdir -p /models
 
 ENV ENGINE_BACKEND=gpu \
@@ -152,11 +158,10 @@ WORKDIR /app
 RUN uv python install 3.12
 
 COPY pyproject.toml uv.lock .python-version ./
-COPY packages/shared-py ./packages/shared-py
+COPY packages/shared-py/pyproject.toml ./packages/shared-py/pyproject.toml
 COPY apps/engine-py/pyproject.toml ./apps/engine-py/pyproject.toml
-COPY apps/engine-py/src ./apps/engine-py/src
 
-RUN uv sync --frozen --no-dev --package metamorph-engine \
+RUN uv sync --frozen --no-dev --no-install-workspace --package metamorph-engine \
     && uv pip install --python /app/.venv/bin/python --no-cache \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
         --index-strategy unsafe-best-match \
@@ -266,6 +271,7 @@ COPY apps/engine-py/docker/entrypoint.sh ./docker/entrypoint.sh
 COPY apps/engine-py/scripts/download_models.sh ./scripts/download_models.sh
 
 RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh \
+    && uv sync --frozen --no-dev --inexact --package metamorph-engine \
     && mkdir -p /models
 
 ENV ENGINE_BACKEND=gpu \
