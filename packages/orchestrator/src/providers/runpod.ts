@@ -16,6 +16,7 @@ export interface RunPodConfig {
   readonly cloud?: "SECURE" | "COMMUNITY" | undefined;
   readonly dataCenterIds?: ReadonlyArray<string> | undefined;
   readonly networkVolumeId?: string | undefined;
+  readonly globalVolumeId?: string | undefined;
 }
 
 const RunPodGpuInfo = Schema.Struct({
@@ -122,15 +123,30 @@ export const makeRunPodProvider = Effect.fn("makeRunPodProvider")(function* (con
       if (config.dataCenterIds && config.dataCenterIds.length > 0) {
         body["dataCenterIds"] = [...config.dataCenterIds];
       }
+      const mountPath = request.env["MODEL_VOLUME_DIR"] ?? "/models";
+      const mounts: Record<string, unknown> = {};
+      if (config.globalVolumeId) {
+        mounts["global"] = [
+          {
+            volumeId: config.globalVolumeId,
+            path: mountPath,
+          },
+        ];
+      }
       if (config.networkVolumeId) {
-        body["mounts"] = {
-          network: [
-            {
-              volumeId: config.networkVolumeId,
-              path: request.env["MODEL_VOLUME_DIR"] ?? "/models",
-            },
-          ],
-        };
+        mounts["network"] = [
+          {
+            volumeId: config.networkVolumeId,
+            path: config.globalVolumeId
+              ? mountPath === "/runpod-volume"
+                ? "/models"
+                : "/runpod-volume"
+              : mountPath,
+          },
+        ];
+      }
+      if (Object.keys(mounts).length > 0) {
+        body["mounts"] = mounts;
       }
 
       const response = yield* HttpClientRequest.post("/pods").pipe(
