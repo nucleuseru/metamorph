@@ -65,6 +65,7 @@ const AppProviderRegistryLayer = Layer.effect(
     );
     const runpodDcOpt = yield* Config.option(Config.String("RUNPOD_DATA_CENTER_IDS"));
     const runpodVolOpt = yield* Config.option(Config.String("RUNPOD_NETWORK_VOLUME_ID"));
+    const runpodGlobalVolOpt = yield* Config.option(Config.String("RUNPOD_GLOBAL_VOLUME_ID"));
 
     const vastKeyOpt = yield* Config.option(Config.Redacted("VASTAI_API_KEY"));
     const vastBaseOpt = yield* Config.option(Config.String("VASTAI_API_URL"));
@@ -97,6 +98,7 @@ const AppProviderRegistryLayer = Layer.effect(
                   .filter(Boolean)
               : undefined,
             networkVolumeId: cleanOption(runpodVolOpt),
+            globalVolumeId: cleanOption(runpodGlobalVolOpt),
           });
           providers.push(provider);
           seen.add("runpod");

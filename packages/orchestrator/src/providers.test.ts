@@ -129,7 +129,10 @@ describe("GPU providers & failover", () => {
           cloud?: string;
           dataCenterIds?: string[];
           networkVolumes?: unknown;
-          mounts?: { network?: Array<{ volumeId: string; path: string }> };
+          mounts?: {
+            network?: Array<{ volumeId: string; path: string }>;
+            global?: Array<{ volumeId: string; path: string }>;
+          };
           gpu?: { minCudaVersion?: string };
         };
         assert.equal(secondReq.cloud, "SECURE");
@@ -139,6 +142,29 @@ describe("GPU providers & failover", () => {
           network: [{ volumeId: "vol_123", path: "/models" }],
         });
         assert.equal(secondReq.gpu?.minCudaVersion, "12.8");
+
+        const runpodGlobal = yield* makeRunPodProvider({
+          apiKey: "rp_test",
+          cloud: "SECURE",
+          globalVolumeId: "gsb_123",
+        });
+        yield* runpodGlobal.provision({
+          instanceId: "inst-global",
+          userId: "user-1",
+          modalities: ["voice"],
+          quality: "standard",
+          hardware: hw,
+          env: { ENGINE_INSTANCE_ID: "inst-global" },
+        });
+        const globalReq = requests[requests.length - 1]!.body as {
+          mounts?: {
+            network?: Array<{ volumeId: string; path: string }>;
+            global?: Array<{ volumeId: string; path: string }>;
+          };
+        };
+        assert.deepEqual(globalReq.mounts, {
+          global: [{ volumeId: "gsb_123", path: "/models" }],
+        });
 
         const status = yield* runpod.getStatus("pod-4090-1");
         assert.equal(status.status, "running");
