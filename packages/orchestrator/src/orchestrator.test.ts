@@ -39,7 +39,7 @@ describe("EngineOrchestrator lifecycle, webhooks, conflicts, and reconciliation"
         Effect.sync(() => {
           terminated.push(id);
         }),
-      listManaged: () => Effect.succeed([]),
+      listManaged: Effect.succeed([]),
     };
 
     const httpLayer = Layer.succeed(
@@ -194,7 +194,7 @@ describe("EngineOrchestrator lifecycle, webhooks, conflicts, and reconciliation"
         Effect.sync(() => {
           terminated.push(id);
         }),
-      listManaged: () => Effect.succeed([orphan]),
+      listManaged: Effect.succeed([orphan]),
     };
 
     const testLayer = EngineOrchestrator.layer.pipe(
@@ -225,7 +225,7 @@ describe("EngineOrchestrator lifecycle, webhooks, conflicts, and reconciliation"
     await Effect.runPromise(
       Effect.gen(function* () {
         const orchestrator = yield* EngineOrchestrator;
-        yield* orchestrator.reconcileOnce();
+        yield* orchestrator.reconcileOnce;
         assert.deepEqual(terminated, ["orphan-pod-99"]);
       }).pipe(Effect.provide(testLayer)),
     );

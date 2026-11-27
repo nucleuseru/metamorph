@@ -19,10 +19,10 @@ import { FrameFlags, Track, VideoCodec, packFrame, unpackFrame } from "@metamorp
 import { Effect, Exit, Layer, Scope } from "effect";
 import { FetchHttpClient, HttpRouter } from "effect/http";
 
+import { AssetRepository, PersonaRepository, UsageRepository } from "./repositories/index.ts";
 import { AppRoutes } from "./server.ts";
 import { Auth, type AuthShape } from "./services/auth.ts";
 import { EngineTokenService } from "./services/engine-tokens.ts";
-import { AssetRepository, PersonaRepository, UsageRepository } from "./services/repositories.ts";
 import { ObjectStorage } from "./services/storage.ts";
 
 interface MockEngineState {
@@ -329,7 +329,7 @@ describe("Engine API, Orchestrator, Assets, Personas, SSE & WS Relay", () => {
         Effect.sync(() => {
           terminatedPods.push(id);
         }),
-      listManaged: () => Effect.succeed([]),
+      listManaged: Effect.succeed([]),
     };
 
     const infraLayer = Layer.mergeAll(
@@ -373,7 +373,7 @@ describe("Engine API, Orchestrator, Assets, Personas, SSE & WS Relay", () => {
       Layer.provide(NodeHttpServer.layer(() => apiHttpServer, { host: "127.0.0.1", port: 0 })),
     );
 
-    appScope = Effect.runSync(Scope.make());
+    appScope = Scope.makeUnsafe();
     await Effect.runPromise(Layer.buildWithScope(serverLayer, appScope));
     apiPort = (apiHttpServer.address() as AddressInfo).port;
   })();

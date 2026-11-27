@@ -31,7 +31,10 @@ export const FrameFlags = {
 } as const;
 export type FrameFlags = number;
 
-export class ProtocolError extends Schema.TaggedError<ProtocolError>()("ProtocolError", {
+export class ProtocolError extends Schema.TaggedError<
+  ProtocolError,
+  { readonly brand: unique symbol }
+>()("ProtocolError", {
   message: Schema.String,
 }) {}
 

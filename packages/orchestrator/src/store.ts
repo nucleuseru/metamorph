@@ -88,7 +88,7 @@ export interface InstanceStoreShape {
   readonly findActiveByUserId: (
     userId: string,
   ) => Effect.Effect<EngineInstanceRecord | null, StoreError>;
-  readonly listActive: () => Effect.Effect<ReadonlyArray<EngineInstanceRecord>, StoreError>;
+  readonly listActive: Effect.Effect<ReadonlyArray<EngineInstanceRecord>, StoreError>;
   readonly listByUserId: (
     userId: string,
     options?: { readonly includeEnded?: boolean | undefined; readonly limit?: number | undefined },
@@ -160,12 +160,11 @@ export class InstanceStore extends Context.Service<InstanceStore, InstanceStoreS
           }),
         );
 
-      const listActive: InstanceStoreShape["listActive"] = () =>
-        Ref.get(ref).pipe(
-          Effect.map((map) =>
-            [...map.values()].filter((item) => !TERMINAL_SESSION_STATUSES.has(item.status)),
-          ),
-        );
+      const listActive: InstanceStoreShape["listActive"] = Ref.get(ref).pipe(
+        Effect.map((map) =>
+          [...map.values()].filter((item) => !TERMINAL_SESSION_STATUSES.has(item.status)),
+        ),
+      );
 
       const listByUserId: InstanceStoreShape["listByUserId"] = (userId, options) =>
         Ref.get(ref).pipe(

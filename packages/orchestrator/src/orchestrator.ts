@@ -83,7 +83,7 @@ export interface EngineOrchestratorShape {
     EngineInstanceRecord,
     InstanceNotFoundError | WebhookVerificationError | StoreError
   >;
-  readonly reconcileOnce: () => Effect.Effect<void, never>;
+  readonly reconcileOnce: Effect.Effect<void, never>;
 }
 
 /** Computes elapsed active seconds and USD cost from billing rate and timestamps. */
@@ -570,11 +570,9 @@ export class EngineOrchestrator extends Context.Service<
         return yield* stopAndCleanup(record, event.reason ?? "engine_shutting_down");
       });
 
-      const reconcileOnce: EngineOrchestratorShape["reconcileOnce"] = Effect.fn(
-        "EngineOrchestrator.reconcileOnce",
-      )(function* () {
+      const reconcileOnce: EngineOrchestratorShape["reconcileOnce"] = Effect.gen(function* () {
         const nowMs = yield* Clock.currentTimeMillis;
-        const active = yield* store.listActive().pipe(Effect.orElseSucceed(() => []));
+        const active = yield* store.listActive.pipe(Effect.orElseSucceed(() => []));
         const knownProviderKeys = new Set<string>();
 
         for (const item of active) {
@@ -645,7 +643,7 @@ export class EngineOrchestrator extends Context.Service<
 
         // Terminate orphan provider instances tagged as metamorph-* that have no active DB session
         for (const provider of registry.list()) {
-          const managed = yield* provider.listManaged().pipe(Effect.orElseSucceed(() => []));
+          const managed = yield* provider.listManaged.pipe(Effect.orElseSucceed(() => []));
           for (const inst of managed) {
             if (inst.status === "terminated" || inst.status === "stopped") continue;
             const key = `${inst.provider}:${inst.providerInstanceId}`;
@@ -672,7 +670,7 @@ export class EngineOrchestrator extends Context.Service<
             }
           }
         }
-      });
+      }).pipe(Effect.withSpan("EngineOrchestrator.reconcileOnce"));
 
       return EngineOrchestrator.of({
         provisionSession,
@@ -723,7 +721,7 @@ export const ReconcilerLayer = Layer.effectDiscard(
     const config = yield* OrchestratorConfig;
     const orchestrator = yield* EngineOrchestrator;
 
-    const loop = orchestrator.reconcileOnce().pipe(
+    const loop = orchestrator.reconcileOnce.pipe(
       Effect.catchCause((cause) => Effect.logWarning("Reconciler cycle error", cause)),
       Effect.repeat(Schedule.spaced(Duration.seconds(Math.max(1, config.reconcileIntervalS)))),
       Effect.forkScoped,

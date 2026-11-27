@@ -1,6 +1,3 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
-
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -8,51 +5,43 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import {
-  Clock,
-  Config,
-  Context,
-  Effect,
-  Layer,
-  Option,
-  Redacted,
-  Ref,
-  Result,
-  Schema,
-} from "effect";
+import { Clock, Config, Context, Effect, Layer, Option, Ref, Result, Schema } from "effect";
 import { Mac } from "effect/crypto";
 import { Hex } from "effect/encoding";
 
-export class StorageError extends Schema.TaggedError<StorageError>()("StorageError", {
-  message: Schema.String,
-  cause: Schema.optionalKey(Schema.Defect()),
-}) {}
+class StorageError extends Schema.TaggedError<StorageError, { readonly brand: unique symbol }>()(
+  "StorageError",
+  {
+    message: Schema.String,
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {}
 
-export interface PutObjectInput {
+interface PutObjectInput {
   readonly key: string;
   readonly bytes: Uint8Array;
   readonly contentType: string;
 }
 
-export interface StoredObject {
+interface StoredObject {
   readonly bytes: Uint8Array;
   readonly contentType: string | undefined;
 }
 
-export interface SignedUrlInput {
+interface SignedUrlInput {
   readonly assetId: string;
   readonly storageKey: string;
   readonly expiresInSeconds?: number | undefined;
 }
 
-export interface VerifyLocalSignedUrlInput {
+interface VerifyLocalSignedUrlInput {
   readonly assetId: string;
   readonly expires: number;
   readonly sig: string;
 }
 
-export interface ObjectStorageShape {
-  readonly backend: "s3" | "local" | "memory";
+interface ObjectStorageShape {
+  readonly backend: "s3" | "memory";
   readonly put: (input: PutObjectInput) => Effect.Effect<void, StorageError>;
   readonly get: (key: string) => Effect.Effect<StoredObject, StorageError>;
   readonly delete: (key: string) => Effect.Effect<void, StorageError>;
@@ -61,16 +50,6 @@ export interface ObjectStorageShape {
     input: VerifyLocalSignedUrlInput,
   ) => Effect.Effect<boolean, StorageError>;
 }
-
-const resolveSafeLocalPath = (rootDir: string, storageKey: string): string => {
-  const normalizedRoot = path.resolve(rootDir);
-  const cleanKey = storageKey.replace(/^\/+/, "");
-  const resolved = path.resolve(normalizedRoot, cleanKey);
-  if (!resolved.startsWith(`${normalizedRoot}${path.sep}`)) {
-    throw new StorageError({ message: `Unsafe storage key path: ${storageKey}` });
-  }
-  return resolved;
-};
 
 const signLocalDownload = (
   mac: Mac.Mac["Service"],
@@ -180,169 +159,96 @@ export class ObjectStorage extends Context.Service<ObjectStorage, ObjectStorageS
   static readonly layer = Layer.effect(
     ObjectStorage,
     Effect.gen(function* () {
-      const mac = yield* Mac.Mac;
-      const bucketOpt = yield* Config.option(Config.String("S3_BUCKET"));
-      const authSecret = yield* Config.Redacted("BETTER_AUTH_SECRET");
-      const apiPublicUrlOpt = yield* Config.option(Config.String("API_PUBLIC_URL"));
-      const betterAuthUrl = yield* Config.String("BETTER_AUTH_URL").pipe(
-        Config.withDefault("http://localhost:3001"),
-      );
-      const publicBaseUrl = Option.match(apiPublicUrlOpt, {
-        onNone: () => betterAuthUrl,
-        onSome: (v) => (v.trim() === "" ? betterAuthUrl : v.trim()),
-      }).replace(/\/+$/, "");
-
-      const bucket =
-        Option.isSome(bucketOpt) && bucketOpt.value.trim() !== ""
-          ? bucketOpt.value.trim()
-          : undefined;
-
-      if (bucket) {
-        const region = yield* Config.String("S3_REGION").pipe(Config.withDefault("us-east-1"));
-        const endpointOpt = yield* Config.option(Config.String("S3_ENDPOINT"));
-        const forcePathStyle = yield* Config.Boolean("S3_FORCE_PATH_STYLE").pipe(
-          Config.withDefault(false),
-        );
-        const profileOpt = yield* Config.option(Config.String("AWS_PROFILE"));
-
-        const client = yield* Effect.acquireRelease(
-          Effect.sync(
-            () =>
-              new S3Client({
-                region,
-                forcePathStyle,
-                ...(Option.isSome(endpointOpt) && endpointOpt.value.trim() !== ""
-                  ? { endpoint: endpointOpt.value.trim() }
-                  : {}),
-                ...(Option.isSome(profileOpt) && profileOpt.value.trim() !== ""
-                  ? { profile: profileOpt.value.trim() }
-                  : {}),
-              }),
-          ),
-          (c) => Effect.sync(() => c.destroy()),
-        );
-
-        return ObjectStorage.of({
-          backend: "s3",
-          put: ({ key, bytes, contentType }) =>
-            Effect.tryPromise({
-              try: () =>
-                client.send(
-                  new PutObjectCommand({
-                    Bucket: bucket,
-                    Key: key,
-                    Body: bytes,
-                    ContentType: contentType,
-                  }),
-                ),
-              catch: (cause) =>
-                new StorageError({ message: `S3 PutObject failed for ${key}`, cause }),
-            }).pipe(Effect.asVoid),
-          get: (key) =>
-            Effect.tryPromise({
-              try: async () => {
-                const res = await client.send(
-                  new GetObjectCommand({
-                    Bucket: bucket,
-                    Key: key,
-                  }),
-                );
-                if (!res.Body) {
-                  throw new Error(`Empty S3 body for ${key}`);
-                }
-                const bytes = await res.Body.transformToByteArray();
-                return {
-                  bytes,
-                  contentType: res.ContentType,
-                };
-              },
-              catch: (cause) =>
-                new StorageError({ message: `S3 GetObject failed for ${key}`, cause }),
-            }),
-          delete: (key) =>
-            Effect.tryPromise({
-              try: () =>
-                client.send(
-                  new DeleteObjectCommand({
-                    Bucket: bucket,
-                    Key: key,
-                  }),
-                ),
-              catch: (cause) =>
-                new StorageError({ message: `S3 DeleteObject failed for ${key}`, cause }),
-            }).pipe(Effect.asVoid),
-          getSignedDownloadUrl: ({ storageKey, expiresInSeconds }) =>
-            Effect.tryPromise({
-              try: () =>
-                getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: storageKey }), {
-                  expiresIn: expiresInSeconds ?? 900,
-                }),
-              catch: (cause) =>
-                new StorageError({ message: `S3 presign failed for ${storageKey}`, cause }),
-            }),
-          verifyLocalSignedUrl: () => Effect.succeed(false),
+      const bucket = (yield* Config.String("S3_BUCKET")).trim();
+      if (bucket === "") {
+        return yield* new StorageError({
+          message: "S3_BUCKET environment variable is required and must be non-empty",
         });
       }
 
-      // Local-disk ObjectStorage fallback
-      const localDir = yield* Config.String("STORAGE_LOCAL_DIR").pipe(
-        Config.withDefault("./data/uploads"),
+      const region = yield* Config.String("S3_REGION").pipe(Config.withDefault("us-east-1"));
+      const endpointOpt = yield* Config.option(Config.String("S3_ENDPOINT"));
+      const forcePathStyle = yield* Config.Boolean("S3_FORCE_PATH_STYLE").pipe(
+        Config.withDefault(false),
       );
-      const rootDir = path.resolve(localDir);
-      const signingSecret = Redacted.value(authSecret);
+      const profileOpt = yield* Config.option(Config.String("AWS_PROFILE"));
 
-      yield* Effect.tryPromise({
-        try: () => mkdir(rootDir, { recursive: true }),
-        catch: (cause) =>
-          new StorageError({ message: `Failed to create local upload dir ${rootDir}`, cause }),
-      });
+      const client = yield* Effect.acquireRelease(
+        Effect.sync(
+          () =>
+            new S3Client({
+              region,
+              forcePathStyle,
+              ...(Option.isSome(endpointOpt) && endpointOpt.value.trim() !== ""
+                ? { endpoint: endpointOpt.value.trim() }
+                : {}),
+              ...(Option.isSome(profileOpt) && profileOpt.value.trim() !== ""
+                ? { profile: profileOpt.value.trim() }
+                : {}),
+            }),
+        ),
+        (c) => Effect.sync(() => c.destroy()),
+      );
 
       return ObjectStorage.of({
-        backend: "local",
-        put: ({ key, bytes }) =>
+        backend: "s3",
+        put: ({ key, bytes, contentType }) =>
           Effect.tryPromise({
-            try: async () => {
-              const filePath = resolveSafeLocalPath(rootDir, key);
-              await mkdir(path.dirname(filePath), { recursive: true });
-              await writeFile(filePath, bytes);
-            },
+            try: () =>
+              client.send(
+                new PutObjectCommand({
+                  Bucket: bucket,
+                  Key: key,
+                  Body: bytes,
+                  ContentType: contentType,
+                }),
+              ),
             catch: (cause) =>
-              cause instanceof StorageError
-                ? cause
-                : new StorageError({ message: `Failed to store local object ${key}`, cause }),
-          }),
+              new StorageError({ message: `S3 PutObject failed for ${key}`, cause }),
+          }).pipe(Effect.asVoid),
         get: (key) =>
           Effect.tryPromise({
             try: async () => {
-              const filePath = resolveSafeLocalPath(rootDir, key);
-              const bytes = await readFile(filePath);
-              return { bytes: new Uint8Array(bytes), contentType: undefined };
+              const res = await client.send(
+                new GetObjectCommand({
+                  Bucket: bucket,
+                  Key: key,
+                }),
+              );
+              if (!res.Body) {
+                throw new Error(`Empty S3 body for ${key}`);
+              }
+              const bytes = await res.Body.transformToByteArray();
+              return {
+                bytes,
+                contentType: res.ContentType,
+              };
             },
             catch: (cause) =>
-              cause instanceof StorageError
-                ? cause
-                : new StorageError({ message: `Failed to read local object ${key}`, cause }),
+              new StorageError({ message: `S3 GetObject failed for ${key}`, cause }),
           }),
         delete: (key) =>
           Effect.tryPromise({
-            try: async () => {
-              const filePath = resolveSafeLocalPath(rootDir, key);
-              await rm(filePath, { force: true });
-            },
+            try: () =>
+              client.send(
+                new DeleteObjectCommand({
+                  Bucket: bucket,
+                  Key: key,
+                }),
+              ),
             catch: (cause) =>
-              cause instanceof StorageError
-                ? cause
-                : new StorageError({ message: `Failed to delete local object ${key}`, cause }),
+              new StorageError({ message: `S3 DeleteObject failed for ${key}`, cause }),
+          }).pipe(Effect.asVoid),
+        getSignedDownloadUrl: ({ storageKey, expiresInSeconds }) =>
+          Effect.tryPromise({
+            try: () =>
+              getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: storageKey }), {
+                expiresIn: expiresInSeconds ?? 900,
+              }),
+            catch: (cause) =>
+              new StorageError({ message: `S3 presign failed for ${storageKey}`, cause }),
           }),
-        getSignedDownloadUrl: ({ assetId, expiresInSeconds }) =>
-          Effect.gen(function* () {
-            const nowMs = yield* Clock.currentTimeMillis;
-            const expires = Math.floor(nowMs / 1000) + (expiresInSeconds ?? 900);
-            const sig = yield* signLocalDownload(mac, signingSecret, assetId, expires);
-            return `${publicBaseUrl}/assets/${encodeURIComponent(assetId)}/content?expires=${expires}&sig=${sig}`;
-          }),
-        verifyLocalSignedUrl: ({ assetId, expires, sig }) =>
-          verifyLocalDownload(mac, signingSecret, assetId, expires, sig),
+        verifyLocalSignedUrl: () => Effect.succeed(false),
       });
     }),
   );

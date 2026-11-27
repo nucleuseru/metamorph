@@ -135,7 +135,7 @@ describe("GPU providers & failover", () => {
         const status = yield* runpod.getStatus("pod-4090-1");
         assert.equal(status.status, "running");
 
-        const managed = yield* runpod.listManaged();
+        const managed = yield* runpod.listManaged;
         assert.equal(managed.length, 1);
         assert.equal(managed[0]!.instanceId, "inst-1");
 

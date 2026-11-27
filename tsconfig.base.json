@@ -12,6 +12,13 @@
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
     "noUncheckedIndexedAccess": true,
-    "plugins": [{ "name": "@effect/language-service" }]
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnosticSeverity": {
+          "unstableApiUsage": "off"
+        }
+      }
+    ]
   }
 }

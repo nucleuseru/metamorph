@@ -18,7 +18,7 @@ const decodeReady = Schema.decodeUnknownEffect(EngineReadyResponse);
 const deriveWsUrl = (httpUrl: string): string =>
   `${httpUrl.replace(/\/+$/, "").replace(/^http(s?):\/\//i, "ws$1://")}/ws/session`;
 
-const listManaged: GpuProvider["listManaged"] = () => Effect.succeed([]);
+const listManaged: GpuProvider["listManaged"] = Effect.succeed([]);
 
 /**
  * Local/static dev `GpuProvider` targeting a running `apps/engine-py` server

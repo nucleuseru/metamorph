@@ -54,15 +54,14 @@ Single multiplexed WebSocket connection carrying both JSON control messages and 
 
 ## JWT Claims Contract (`apps/api` -> `apps/engine-py`)
 
-Tokens are **EdDSA (Ed25519)** JWTs issued by `apps/api` (Better Auth `jwt()` plugin, `GET /api/auth/token`). The engine verifies them with either:
+Tokens are **EdDSA (Ed25519)** JWTs issued by `apps/api` (Better Auth `jwt()` plugin, `GET /api/auth/token`). The engine verifies them via **JWKS**:
 
-- **JWKS (recommended)**: `ENGINE_JWT_JWKS_URL` (e.g. `https://api.example.com/api/auth/jwks`); keys are selected by `kid` and cached for `ENGINE_JWT_JWKS_CACHE_TTL_S` (default `300`).
-- **Static key**: `ENGINE_JWT_PUBLIC_KEY` (Ed25519 PEM), used when no JWKS URL is configured.
+- `ENGINE_JWT_JWKS_URL` (e.g. `https://api.example.com/api/auth/jwks`): keys are selected by `kid` and cached for `ENGINE_JWT_JWKS_CACHE_TTL_S` (default `300`).
 
 Claims:
 
 - `sub` (`string`, required): User ID; verified against `ENGINE_USER_ID` (or bound to the first user in dev).
-- `aud` (`string`): Verified against `ENGINE_JWT_AUDIENCE` when set; otherwise against `ENGINE_INSTANCE_ID` for static-key tokens. Not checked for JWKS tokens when `ENGINE_JWT_AUDIENCE` is unset.
+- `aud` (`string`): Verified against `ENGINE_JWT_AUDIENCE` when set; not checked when `ENGINE_JWT_AUDIENCE` is unset.
 - `iss` (`string`, optional): Verified when `ENGINE_JWT_ISSUER` is configured.
 - `exp` (`number`, required): Expiration timestamp (checked on HTTP, WS auth, and mid-session).
 - `modalities` (`("voice" | "video")[]`, optional): Defaults to enabled instance modalities; any requested modality not enabled on the instance returns `403` / WS `4003`.
@@ -80,7 +79,7 @@ Claims:
 
 ### Multi-Target Image ([Dockerfile](../apps/engine-py/Dockerfile))
 
-Always build from the **repository root** (use [`build-image.sh`](../apps/engine-py/scripts/build-image.sh)):
+Images are built from the **repository root** via [engine-docker.yml](../.github/workflows/engine-docker.yml) (or `docker build -f apps/engine-py/Dockerfile --target <target> .`):
 
 | Target  | Base Image                                     | Purpose                                                                                       |
 | :------ | :--------------------------------------------- | :-------------------------------------------------------------------------------------------- |
@@ -89,17 +88,9 @@ Always build from the **repository root** (use [`build-image.sh`](../apps/engine
 | `mock`  | `python:3.12-slim`                             | Lightweight CPU mock image (`ENGINE_BACKEND=mock`) for local `apps/api` dev                   |
 
 ```bash
-# Full GPU image (default: Ada sm_89 + Hopper sm_90a + Blackwell sm_100a/120a + SageAttention 2.2.0)
-./apps/engine-py/scripts/build-image.sh --image ghcr.io/your-org/metamorph-engine --target full --push
-
-# Full GPU image without SageAttention
-./apps/engine-py/scripts/build-image.sh --target full --no-sage-attn --cuda-archs "89;90a;100a"
-
-# Voice-only CUDA image
-./apps/engine-py/scripts/build-image.sh --image ghcr.io/your-org/metamorph-engine --target voice --push
-
-# Local CPU mock dev via Docker Compose
-docker compose -f apps/engine-py/docker-compose.yml up --build engine-mock
+# Local CPU mock image
+docker build -f apps/engine-py/Dockerfile --target mock -t metamorph-engine:mock .
+docker run --rm -p 8000:8000 --env-file apps/engine-py/.env metamorph-engine:mock
 ```
 
 ### Model Volume Layout & Pre-Population
@@ -137,7 +128,7 @@ Populate a volume once using [`download_models.sh`](../apps/engine-py/scripts/do
 - **Required `ENGINE_*` env vars**:
   - `ENGINE_INSTANCE_ID`, `ENGINE_USER_ID`
   - `ENGINE_ENABLE_VOICE` (`"true"`/`"false"`), `ENGINE_ENABLE_VIDEO` (`"true"`/`"false"`)
-  - `ENGINE_JWT_PUBLIC_KEY` (single-line Ed25519 PEM with `\n` escapes)
+  - `ENGINE_JWT_JWKS_URL` (JWKS endpoint URL, plus optional `ENGINE_JWT_ISSUER` / `ENGINE_JWT_AUDIENCE`)
   - `ENGINE_LIFECYCLE_WEBHOOK_URL`, `ENGINE_LIFECYCLE_WEBHOOK_SECRET`
   - Optional bootstrap: `ENGINE_INITIAL_PROMPT`, `ENGINE_INITIAL_REF_IMAGE_URL`, `ENGINE_INITIAL_REF_AUDIO_URL`
 
@@ -151,20 +142,20 @@ Populate a volume once using [`download_models.sh`](../apps/engine-py/scripts/do
 
 ## Key Configuration (`ENGINE_*`)
 
-| Variable                                                            | Default                   | Description                                                   |
-| :------------------------------------------------------------------ | :------------------------ | :------------------------------------------------------------ |
-| `ENGINE_HOST` / `ENGINE_PORT`                                       | `0.0.0.0` / `8000`        | Bind address and port                                         |
-| `ENGINE_INSTANCE_ID` / `ENGINE_USER_ID`                             | `local-instance` / `None` | Dedicated instance and user binding                           |
-| `ENGINE_ENABLE_VOICE` / `ENGINE_ENABLE_VIDEO`                       | `true` / `true`           | Modalities loaded at boot                                     |
-| `ENGINE_BACKEND`                                                    | `gpu`                     | `gpu` (Seed-VC + JoyAI) or `mock` (CPU testing)               |
-| `ENGINE_JWT_PUBLIC_KEY` / `ENGINE_JWT_ISSUER`                       | `""` / `None`             | Static Ed25519 PEM public key and expected issuer             |
-| `ENGINE_JWT_JWKS_URL` / `_JWKS_CACHE_TTL_S` / `ENGINE_JWT_AUDIENCE` | `None` / `300` / `None`   | JWKS endpoint (Better Auth), key cache TTL, expected audience |
-| `ENGINE_STARTUP_IDLE_TIMEOUT_S` / `ENGINE_DISCONNECT_TIMEOUT_S`     | `120.0` / `30.0`          | Idle and disconnect shutdown timeouts                         |
-| `ENGINE_LIFECYCLE_WEBHOOK_URL` / `_SECRET`                          | `None`                    | Signed lifecycle webhook destination                          |
-| `ENGINE_INITIAL_PROMPT` / `_REF_IMAGE_URL` / `_REF_AUDIO_URL`       | `None`                    | Startup reference asset bootstrap                             |
-| `ENGINE_VIDEO_WIDTH` / `_HEIGHT` / `_FPS`                           | `840` / `480` / `24`      | Video streaming resolution and FPS                            |
-| `ENGINE_VOICE_SAMPLE_RATE` / `_VAD_BACKEND`                         | `22050` / `rms`           | Seed-VC sample rate and VAD mode (`rms` or `none`)            |
-| `ENGINE_AV_SYNC_ENABLED` / `_MAX_HOLD_S`                            | `true` / `1.0`            | Adaptive dual-modality A/V sync controls                      |
+| Variable                                                        | Default                   | Description                                        |
+| :-------------------------------------------------------------- | :------------------------ | :------------------------------------------------- |
+| `ENGINE_HOST` / `ENGINE_PORT`                                   | `0.0.0.0` / `8000`        | Bind address and port                              |
+| `ENGINE_INSTANCE_ID` / `ENGINE_USER_ID`                         | `local-instance` / `None` | Dedicated instance and user binding                |
+| `ENGINE_ENABLE_VOICE` / `ENGINE_ENABLE_VIDEO`                   | `true` / `true`           | Modalities loaded at boot                          |
+| `ENGINE_BACKEND`                                                | `gpu`                     | `gpu` (Seed-VC + JoyAI) or `mock` (CPU testing)    |
+| `ENGINE_JWT_JWKS_URL` / `_JWKS_CACHE_TTL_S`                     | `None` / `300`            | JWKS endpoint (Better Auth) and key cache TTL      |
+| `ENGINE_JWT_ISSUER` / `ENGINE_JWT_AUDIENCE`                     | `None` / `None`           | Expected JWT `iss` and `aud` claims                |
+| `ENGINE_STARTUP_IDLE_TIMEOUT_S` / `ENGINE_DISCONNECT_TIMEOUT_S` | `120.0` / `30.0`          | Idle and disconnect shutdown timeouts              |
+| `ENGINE_LIFECYCLE_WEBHOOK_URL` / `_SECRET`                      | `None`                    | Signed lifecycle webhook destination               |
+| `ENGINE_INITIAL_PROMPT` / `_REF_IMAGE_URL` / `_REF_AUDIO_URL`   | `None`                    | Startup reference asset bootstrap                  |
+| `ENGINE_VIDEO_WIDTH` / `_HEIGHT` / `_FPS`                       | `840` / `480` / `24`      | Video streaming resolution and FPS                 |
+| `ENGINE_VOICE_SAMPLE_RATE` / `_VAD_BACKEND`                     | `22050` / `rms`           | Seed-VC sample rate and VAD mode (`rms` or `none`) |
+| `ENGINE_AV_SYNC_ENABLED` / `_MAX_HOLD_S`                        | `true` / `1.0`            | Adaptive dual-modality A/V sync controls           |
 
 ## Commands
 

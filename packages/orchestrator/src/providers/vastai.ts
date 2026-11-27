@@ -23,8 +23,8 @@ export interface VastAiConfig {
 const VastOffer = Schema.Struct({
   id: Schema.Int,
   gpu_name: Schema.optionalKey(Schema.String),
-  gpu_ram: Schema.optionalKey(Schema.Number),
-  dph_total: Schema.optionalKey(Schema.Number),
+  gpu_ram: Schema.optionalKey(Schema.Finite),
+  dph_total: Schema.optionalKey(Schema.Finite),
 });
 
 const VastSearchResponse = Schema.Struct({
@@ -46,8 +46,8 @@ const VastInstance = Schema.Struct({
   label: Schema.optionalKey(Schema.NullOr(Schema.String)),
   actual_status: Schema.optionalKey(Schema.NullOr(Schema.String)),
   public_ipaddr: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  dph_total: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-  start_date: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  dph_total: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  start_date: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   ports: Schema.optionalKey(
     Schema.NullOr(Schema.Record(Schema.String, Schema.Array(VastPortMapping))),
   ),
@@ -393,65 +393,63 @@ export const makeVastAiProvider = Effect.fn("makeVastAiProvider")(function* (con
     });
   });
 
-  const listManaged: GpuProvider["listManaged"] = Effect.fn("VastAiProvider.listManaged")(
-    function* () {
-      const resp = yield* client.get("/instances/").pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderUnavailableError({
-              provider: "vastai",
-              message: `Vast.ai GET /instances/ failed: ${cause.message}`,
-              retryable: true,
-              cause,
-            }),
-        ),
-      );
-      if (resp.status < 200 || resp.status >= 300) {
-        return yield* new ProviderUnavailableError({
-          provider: "vastai",
-          message: `Vast.ai GET /instances/ returned HTTP ${resp.status}`,
-          retryable: responseStatusMessage(resp.status),
-        });
-      }
+  const listManaged: GpuProvider["listManaged"] = Effect.gen(function* () {
+    const resp = yield* client.get("/instances/").pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderUnavailableError({
+            provider: "vastai",
+            message: `Vast.ai GET /instances/ failed: ${cause.message}`,
+            retryable: true,
+            cause,
+          }),
+      ),
+    );
+    if (resp.status < 200 || resp.status >= 300) {
+      return yield* new ProviderUnavailableError({
+        provider: "vastai",
+        message: `Vast.ai GET /instances/ returned HTTP ${resp.status}`,
+        retryable: responseStatusMessage(resp.status),
+      });
+    }
 
-      const json = yield* resp.json.pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderUnavailableError({
-              provider: "vastai",
-              message: `Invalid Vast.ai instances list JSON: ${cause.message}`,
-              retryable: true,
-              cause,
-            }),
-        ),
-      );
-      const parsed = yield* decodeVastList(json).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderUnavailableError({
-              provider: "vastai",
-              message: `Unexpected Vast.ai instances list schema: ${cause.message}`,
-              retryable: false,
-              cause,
-            }),
-        ),
-      );
+    const json = yield* resp.json.pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderUnavailableError({
+            provider: "vastai",
+            message: `Invalid Vast.ai instances list JSON: ${cause.message}`,
+            retryable: true,
+            cause,
+          }),
+      ),
+    );
+    const parsed = yield* decodeVastList(json).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderUnavailableError({
+            provider: "vastai",
+            message: `Unexpected Vast.ai instances list schema: ${cause.message}`,
+            retryable: false,
+            cause,
+          }),
+      ),
+    );
 
-      const managed: Array<ManagedProviderInstance> = [];
-      for (const inst of parsed.instances) {
-        const instanceId = extractInstanceIdFromLabel(inst.label);
-        if (instanceId === null) continue;
-        managed.push({
-          provider: "vastai",
-          providerInstanceId: String(inst.id),
-          instanceId,
-          status: mapVastStatus(inst.actual_status),
-          createdAtMs: inst.start_date != null ? Math.round(inst.start_date * 1000) : null,
-        });
-      }
-      return managed;
-    },
-  );
+    const managed: Array<ManagedProviderInstance> = [];
+    for (const inst of parsed.instances) {
+      const instanceId = extractInstanceIdFromLabel(inst.label);
+      if (instanceId === null) continue;
+      managed.push({
+        provider: "vastai",
+        providerInstanceId: String(inst.id),
+        instanceId,
+        status: mapVastStatus(inst.actual_status),
+        createdAtMs: inst.start_date != null ? Math.round(inst.start_date * 1000) : null,
+      });
+    }
+    return managed;
+  }).pipe(Effect.withSpan("VastAiProvider.listManaged"));
 
   const provider: GpuProvider = {
     name: "vastai",

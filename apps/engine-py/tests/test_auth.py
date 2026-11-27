@@ -1,14 +1,12 @@
-"""Tests for EdDSA JWT verification, HTTP auth, WS handshake, and auth refresh."""
+"""Tests for EdDSA JWKS JWT verification, HTTP auth, WS handshake, and auth refresh."""
 
 from __future__ import annotations
 
-import base64
 import time
 from typing import Any
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from metamorph_engine.main import create_app
@@ -16,10 +14,11 @@ from starlette.websockets import WebSocketDisconnect
 from tests.conftest import build_test_settings, generate_ed25519_keypair, mint_jwt
 
 
-def test_http_auth_enforces_eddsa_claims_and_modalities() -> None:
-    priv, pub_pem = generate_ed25519_keypair()
+def test_http_auth_enforces_eddsa_claims_and_modalities(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
     other_priv, _ = generate_ed25519_keypair()
-    settings = build_test_settings(pub_pem, jwt_issuer="metamorph-api")
+    settings = build_test_settings(jwt_issuer="metamorph-api", jwt_audience="inst-1")
     app = create_app(settings)
 
     with TestClient(app) as client:
@@ -35,7 +34,7 @@ def test_http_auth_enforces_eddsa_claims_and_modalities() -> None:
         assert bad_resp.status_code == 401
 
         # Wrong user (sub)
-        wrong_user = mint_jwt(priv, sub="user-999", iss="metamorph-api")
+        wrong_user = mint_jwt(jwks_signer, sub="user-999", iss="metamorph-api")
         wrong_user_resp = client.get(
             "/session/status",
             headers={"Authorization": f"Bearer {wrong_user}"},
@@ -43,7 +42,7 @@ def test_http_auth_enforces_eddsa_claims_and_modalities() -> None:
         assert wrong_user_resp.status_code == 403
 
         # Wrong audience (instance_id)
-        wrong_aud = mint_jwt(priv, aud="inst-other", iss="metamorph-api")
+        wrong_aud = mint_jwt(jwks_signer, aud="inst-other", iss="metamorph-api")
         wrong_aud_resp = client.get(
             "/session/status",
             headers={"Authorization": f"Bearer {wrong_aud}"},
@@ -51,7 +50,7 @@ def test_http_auth_enforces_eddsa_claims_and_modalities() -> None:
         assert wrong_aud_resp.status_code == 401
 
         # Expired token
-        expired = mint_jwt(priv, exp_offset_s=-60, iss="metamorph-api")
+        expired = mint_jwt(jwks_signer, exp_offset_s=-60, iss="metamorph-api")
         expired_resp = client.get(
             "/session/status",
             headers={"Authorization": f"Bearer {expired}"},
@@ -59,7 +58,7 @@ def test_http_auth_enforces_eddsa_claims_and_modalities() -> None:
         assert expired_resp.status_code == 401
 
         # Valid voice-only token cannot patch video prompt
-        voice_only = mint_jwt(priv, modalities=["voice"], iss="metamorph-api")
+        voice_only = mint_jwt(jwks_signer, modalities=["voice"], iss="metamorph-api")
         resp = client.post(
             "/session/config",
             headers={"Authorization": f"Bearer {voice_only}"},
@@ -68,7 +67,7 @@ def test_http_auth_enforces_eddsa_claims_and_modalities() -> None:
         assert resp.status_code == 403
 
         # Valid full token works
-        valid = mint_jwt(priv, modalities=["voice", "video"], iss="metamorph-api")
+        valid = mint_jwt(jwks_signer, modalities=["voice", "video"], iss="metamorph-api")
         ok_resp = client.get(
             "/session/status",
             headers={"Authorization": f"Bearer {valid}"},
@@ -77,9 +76,8 @@ def test_http_auth_enforces_eddsa_claims_and_modalities() -> None:
         assert ok_resp.json()["user_id"] == "user-1"
 
 
-def test_ws_first_message_auth_and_refresh() -> None:
-    priv, pub_pem = generate_ed25519_keypair()
-    settings = build_test_settings(pub_pem, ws_auth_timeout_s=0.3)
+def test_ws_first_message_auth_and_refresh(jwks_signer: Ed25519PrivateKey) -> None:
+    settings = build_test_settings(ws_auth_timeout_s=0.3)
     app = create_app(settings)
 
     with TestClient(app) as client:
@@ -99,8 +97,8 @@ def test_ws_first_message_auth_and_refresh() -> None:
             assert msg["code"] == "auth_required"
 
         # Valid first-message auth + mid-session auth_refresh
-        token1 = mint_jwt(priv, modalities=["voice"])
-        token2 = mint_jwt(priv, modalities=["voice", "video"])
+        token1 = mint_jwt(jwks_signer, modalities=["voice"])
+        token2 = mint_jwt(jwks_signer, modalities=["voice", "video"])
         with client.websocket_connect("/ws/session") as ws:
             ws.send_json({"type": "auth", "token": token1})
             auth_ok = ws.receive_json()
@@ -113,11 +111,10 @@ def test_ws_first_message_auth_and_refresh() -> None:
             assert refreshed["authorized_modalities"] == ["voice", "video"]
 
 
-def test_ws_bearer_header_auth() -> None:
-    priv, pub_pem = generate_ed25519_keypair()
-    settings = build_test_settings(pub_pem)
+def test_ws_bearer_header_auth(jwks_signer: Ed25519PrivateKey) -> None:
+    settings = build_test_settings()
     app = create_app(settings)
-    token = mint_jwt(priv, modalities=["video"])
+    token = mint_jwt(jwks_signer, modalities=["video"])
 
     with (
         TestClient(app) as client,
@@ -137,15 +134,6 @@ JWKS_URL = "https://api.example.test/api/auth/jwks"
 BA_ISSUER = "https://api.example.test"
 
 
-def _jwks_for(private_key: Ed25519PrivateKey, kid: str) -> dict[str, Any]:
-    raw = private_key.public_key().public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    x = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-    return {"keys": [{"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA", "kid": kid, "x": x}]}
-
-
 def _better_auth_token(
     private_key: Ed25519PrivateKey,
     *,
@@ -161,17 +149,8 @@ def _better_auth_token(
     return jwt.encode(payload, private_key, algorithm="EdDSA", headers={"kid": kid})
 
 
-@pytest.fixture
-def jwks_signer(monkeypatch: pytest.MonkeyPatch) -> Ed25519PrivateKey:
-    private_key, _ = generate_ed25519_keypair()
-    jwks = _jwks_for(private_key, "key-1")
-    monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", lambda self: jwks)
-    return private_key
-
-
 def _jwks_app() -> Any:
     settings = build_test_settings(
-        "",
         jwt_jwks_url=JWKS_URL,
         jwt_issuer=BA_ISSUER,
         jwt_audience=BA_ISSUER,
@@ -217,7 +196,7 @@ def test_ws_auth_via_jwks_defaults_to_enabled_modalities(
 
 def test_no_verification_key_configured_rejects_tokens() -> None:
     priv, _ = generate_ed25519_keypair()
-    app = create_app(build_test_settings(""))
+    app = create_app(build_test_settings(jwt_jwks_url=None))
     with TestClient(app) as client:
         resp = client.get(
             "/session/status",

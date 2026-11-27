@@ -5,7 +5,7 @@ import { Config, Context, Effect, Layer } from "effect";
 import { relations } from "../db/schema.ts";
 
 /** Pooled `@effect/sql-pg` client configured from `DATABASE_URL`. */
-export const PgClientLayer = Layer.unwrap(
+const PgClientLayer = Layer.unwrap(
   Effect.gen(function* () {
     const url = yield* Config.Redacted("DATABASE_URL");
     return PgClient.layer({ url });

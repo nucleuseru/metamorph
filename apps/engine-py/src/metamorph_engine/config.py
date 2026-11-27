@@ -41,8 +41,7 @@ class EngineSettings(BaseSettings):
     enable_video: bool = True
     backend: Literal["gpu", "mock"] = "gpu"
 
-    # Authentication (EdDSA / Ed25519 JWT minted by apps/api)
-    jwt_public_key: str = ""
+    # Authentication (EdDSA / Ed25519 JWT via JWKS)
     jwt_jwks_url: str | None = None
     jwt_jwks_cache_ttl_s: int = Field(default=300, ge=1)
     jwt_audience: str | None = None
@@ -152,11 +151,6 @@ class EngineSettings(BaseSettings):
         return {
             host.strip().lower() for host in self.allowed_asset_hosts.split(",") if host.strip()
         }
-
-    @property
-    def normalized_jwt_public_key(self) -> str:
-        """Return Ed25519 PEM public key with literal escaped newlines expanded."""
-        return self.jwt_public_key.replace("\\n", "\n").strip()
 
     @property
     def resolved_vendor_dir(self) -> Path:

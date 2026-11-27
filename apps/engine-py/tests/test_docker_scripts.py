@@ -11,7 +11,6 @@ ENTRYPOINT = ENGINE_DIR / "docker" / "entrypoint.sh"
 SCRIPTS_DIR = ENGINE_DIR / "scripts"
 ALL_SHELL_SCRIPTS = [
     ENTRYPOINT,
-    SCRIPTS_DIR / "build-image.sh",
     SCRIPTS_DIR / "download_models.sh",
 ]
 
@@ -63,44 +62,6 @@ def test_entrypoint_resolves_volume_paths_and_respects_overrides(tmp_path: Path)
     )
     parsed2 = dict(line.split("=", 1) for line in res2.stdout.strip().splitlines() if "=" in line)
     assert parsed2["ENGINE_VIDEO_DIT_CKPT"] == custom_dit
-
-
-def test_build_image_dry_run_command() -> None:
-    res = subprocess.run(
-        [
-            str(SCRIPTS_DIR / "build-image.sh"),
-            "--target",
-            "voice",
-            "--image",
-            "ghcr.io/metamorph/engine",
-            "--tag",
-            "v1-voice",
-            "--dry-run",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    out = res.stdout.strip()
-    assert "--target voice" in out
-    assert "--tag ghcr.io/metamorph/engine:v1-voice" in out
-    assert str(ENGINE_DIR / "Dockerfile") in out
-
-    full_default = subprocess.run(
-        [str(SCRIPTS_DIR / "build-image.sh"), "--target", "full", "--dry-run"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert "INSTALL_SAGE_ATTN=1" in full_default.stdout
-
-    full_no_sage = subprocess.run(
-        [str(SCRIPTS_DIR / "build-image.sh"), "--target", "full", "--no-sage-attn", "--dry-run"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert "INSTALL_SAGE_ATTN=0" in full_no_sage.stdout
 
 
 def test_github_workflow_builds_and_deploys_all_targets() -> None:

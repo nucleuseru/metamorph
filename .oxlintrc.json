@@ -13,20 +13,12 @@
     ".turbo/**",
     ".next/**",
     "apps/web/.next/**",
-    "**/.react-email/**",
     "node_modules/**",
     "vendor/**",
     ".agents/**",
     "**/.agents/**"
   ],
   "overrides": [
-    {
-      "files": ["packages/email/**/*.{ts,tsx}"],
-      "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y"],
-      "rules": {
-        "react/react-in-jsx-scope": "off"
-      }
-    },
     {
       "files": ["apps/web/**/*.{ts,tsx}"],
       "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y", "nextjs"],

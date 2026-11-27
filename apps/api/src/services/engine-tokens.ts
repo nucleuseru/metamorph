@@ -17,12 +17,15 @@ import { Jwk, Jwt } from "effect/jose";
 import { engineSigningKey } from "../db/schema.ts";
 import { Database } from "./db.ts";
 
-export class EngineTokenError extends Schema.TaggedError<EngineTokenError>()("EngineTokenError", {
+class EngineTokenError extends Schema.TaggedError<
+  EngineTokenError,
+  { readonly brand: unique symbol }
+>()("EngineTokenError", {
   message: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 
-export const EngineJwtClaims = Schema.Struct({
+const EngineJwtClaims = Schema.Struct({
   sub: Schema.String,
   aud: Schema.String,
   iss: Schema.optionalKey(Schema.String),
@@ -31,23 +34,23 @@ export const EngineJwtClaims = Schema.Struct({
   jti: Schema.String,
   modalities: Schema.Array(ModalitySchema),
 });
-export type EngineJwtClaims = typeof EngineJwtClaims.Type;
+type EngineJwtClaims = typeof EngineJwtClaims.Type;
 
-export interface MintSessionTokenInput {
+interface MintSessionTokenInput {
   readonly userId: string;
   readonly instanceId: string;
   readonly modalities: ReadonlyArray<Modality>;
   readonly ttlSeconds?: number | undefined;
 }
 
-export interface MintedEngineToken {
+interface MintedEngineToken {
   readonly token: string;
   readonly expiresAt: string;
   readonly instanceId: string;
   readonly modalities: ReadonlyArray<Modality>;
 }
 
-export interface EngineTokenServiceShape {
+interface EngineTokenServiceShape {
   readonly kid: string;
   readonly issuer: string;
   readonly publicKeyPem: string;
@@ -57,7 +60,7 @@ export interface EngineTokenServiceShape {
   ) => Effect.Effect<MintedEngineToken, EngineTokenError>;
   readonly verifySessionToken: (
     token: string,
-    expectedInstanceId?: string | undefined,
+    expectedInstanceId?: string,
   ) => Effect.Effect<EngineJwtClaims, EngineTokenError>;
 }
 
@@ -95,7 +98,7 @@ function decryptPrivateKeyPem(payload: string, secret: string): string {
 function derivePublicSpkiFromPkcs8(pkcs8Pem: string): string {
   const priv = createPrivateKey(pkcs8Pem);
   const pub = createPublicKey(priv);
-  return pub.export({ type: "spki", format: "pem" }).toString();
+  return pub.export({ type: "spki", format: "pem" });
 }
 
 function parseDurationSeconds(raw: string): number {
@@ -109,6 +112,19 @@ function parseDurationSeconds(raw: string): number {
   if (unit === "d") return value * 86400;
   return value;
 }
+
+const generateEd25519KeyMaterial = Effect.fnUntraced(function* (
+  signature: Signature.Signature["Service"],
+  kid: string,
+) {
+  const keyPair = yield* Jwk.generateKeyPair({ algorithm: "EdDSA", kid }).pipe(
+    Effect.provideService(Signature.Signature, signature),
+  );
+  const privateKey = yield* Jwk.importPrivate(keyPair.privateKey, "EdDSA");
+  const publicKey = yield* Jwk.importPublic(keyPair.publicKey, "EdDSA");
+  const publicJwk = yield* Jwk.exportPublic(publicKey);
+  return { privateKey, publicKey, publicJwk };
+});
 
 const makeEngineTokenShape = (params: {
   readonly kid: string;
@@ -163,7 +179,7 @@ const makeEngineTokenShape = (params: {
 
   const verifySessionToken: EngineTokenServiceShape["verifySessionToken"] = Effect.fn(
     "EngineTokenService.verifySessionToken",
-  )(function* (token: string, expectedInstanceId?: string | undefined) {
+  )(function* (token: string, expectedInstanceId?: string) {
     const verified = yield* Jwt.verify(EngineJwtClaims, token, params.publicKey, {
       issuer: params.issuer,
       ...(expectedInstanceId ? { audience: expectedInstanceId } : {}),
@@ -210,13 +226,11 @@ export class EngineTokenService extends Context.Service<
         const issuer = options?.issuer ?? "http://localhost:3001";
         const defaultTtlSeconds = options?.defaultTtlSeconds ?? 900;
 
-        const keyPair = yield* Jwk.generateKeyPair({ algorithm: "EdDSA", kid }).pipe(
-          Effect.provideService(Signature.Signature, signature),
+        const { privateKey, publicKey, publicJwk } = yield* generateEd25519KeyMaterial(
+          signature,
+          kid,
         );
-        const privateKey = yield* Jwk.importPrivate(keyPair.privateKey, "EdDSA");
-        const publicKey = yield* Jwk.importPublic(keyPair.publicKey, "EdDSA");
         const publicKeyPem = yield* Jwk.exportSpki(publicKey, { format: "pem" });
-        const publicJwk = yield* Jwk.exportPublic(publicKey);
 
         return EngineTokenService.of(
           makeEngineTokenShape({
@@ -312,14 +326,12 @@ export class EngineTokenService extends Context.Service<
       }
 
       const kid = "primary";
-      const keyPair = yield* Jwk.generateKeyPair({ algorithm: "EdDSA", kid }).pipe(
-        Effect.provideService(Signature.Signature, signature),
+      const { privateKey, publicKey, publicJwk } = yield* generateEd25519KeyMaterial(
+        signature,
+        kid,
       );
-      const privateKey = yield* Jwk.importPrivate(keyPair.privateKey, "EdDSA");
-      const publicKey = yield* Jwk.importPublic(keyPair.publicKey, "EdDSA");
       const pkcs8Pem = yield* Jwk.exportPkcs8(privateKey, { format: "pem" });
       const spkiPem = yield* Jwk.exportSpki(publicKey, { format: "pem" });
-      const publicJwk = yield* Jwk.exportPublic(publicKey);
       const encryptedPrivateKey = encryptPrivateKeyPem(Redacted.value(pkcs8Pem), secretValue);
 
       yield* db
@@ -327,7 +339,7 @@ export class EngineTokenService extends Context.Service<
         .values({
           id: kid,
           publicKeyPem: spkiPem,
-          publicKeyJwk: publicJwk as unknown as Record<string, unknown>,
+          publicKeyJwk: publicJwk as Record<string, unknown>,
           encryptedPrivateKey,
         })
         .onConflictDoNothing();

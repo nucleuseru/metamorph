@@ -12,7 +12,7 @@
   - Schema-first HTTP APIs & SSE (`HttpApi`, `HttpApiGroup`, `HttpApiEndpoint`, `HttpApiBuilder`, `HttpApiSchema`, `HttpApiScalar`, `OpenApi`): `"effect/http-api"`
   - JOSE / Cryptography (`Jwk`, `Jwt`, `Mac`, `Signature`): `"effect/jose"`, `"effect/crypto"`
   - WebSocket (`Socket`, `NodeWS`): `"effect/socket"`, `"@effect/platform-node"`
-- **Workspace Packages**: `@metamorph/shared` (`packages/shared-ts`), `@metamorph/orchestrator` (`packages/orchestrator`), `@metamorph/email` (`packages/email`).
+- **Workspace Packages**: `@metamorph/shared` (`packages/shared-ts`), `@metamorph/orchestrator` (`packages/orchestrator`).
 - **TypeScript**: `apps/api/tsconfig.json` extends `../../tsconfig.base.json` with `rewriteRelativeImportExtensions: true` so `.ts` relative imports work in both native Node execution and `tsc -p tsconfig.build.json` builds.
 
 ## Endpoints
@@ -23,7 +23,6 @@
 - `GET /.well-known/engine-jwks.json` — Public Ed25519 JWKS used by `engine-py` instances to verify instance-scoped session tokens
 - `GET /me` — Current user (`id`, `email`, `name`, `emailVerified`, `image`); requires a Better Auth session (cookie) and returns `401` otherwise
 - `ALL /api/auth/*` — [Better Auth](https://better-auth.com) handler:
-  - Email/password: `POST /api/auth/sign-up/email`, `/sign-in/email`, `/request-password-reset`, `/reset-password`, `GET /verify-email` (sign-in requires a verified email)
   - Google: `POST /api/auth/sign-in/social` with `{ "provider": "google" }` (callback `/api/auth/callback/google`)
   - Better Auth JWT: `GET /api/auth/token` and `GET /api/auth/jwks`
 - `GET /openapi.json` — Generated OpenAPI specification
@@ -31,11 +30,10 @@
 
 ### Reference Assets (`/assets`, Authenticated)
 
-- `POST /assets` — Direct multipart upload (`kind`: `"ref_image"` | `"ref_audio"`, optional `name`, `file`). Validates MIME types (`jpeg`/`png`/`webp` <= 15 MiB, `wav`/`mp3`/`flac`/`ogg`/`m4a`/`webm` <= 25 MiB) and stores in S3 or local `ObjectStorage`.
+- `POST /assets` — Direct multipart upload (`kind`: `"ref_image"` | `"ref_audio"`, optional `name`, `file`). Validates MIME types (`jpeg`/`png`/`webp` <= 15 MiB, `wav`/`mp3`/`flac`/`ogg`/`m4a`/`webm` <= 25 MiB) and stores in S3 `ObjectStorage`.
 - `GET /assets?kind=` — List user assets with short-lived signed download URLs.
 - `GET /assets/:id` — Fetch single asset metadata and signed download URL.
 - `DELETE /assets/:id` — Delete asset metadata and stored object.
-- `GET /assets/:id/content?expires=&sig=` — HMAC-SHA256 signed asset download endpoint used by clients and GPU containers when `S3_BUCKET` is unset.
 
 ### Personas / Presets (`/personas`, Authenticated)
 
@@ -86,8 +84,7 @@ Copy [`apps/api/.env.example`](../apps/api/.env.example) to `apps/api/.env` (loa
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`                              | unset                           | Enables Google sign-in when both are set                         |
 | `JWT_ISSUER` / `JWT_AUDIENCE` / `JWT_EXPIRATION_TIME`                    | base URL / base URL / `15m`     | Claims and TTL of minted JWTs                                    |
 | `ENGINE_JWT_PRIVATE_KEY` / `ENGINE_JWT_JWKS_URL`                         | unset                           | Optional static Ed25519 PKCS#8 key and JWKS URL for engine-py    |
-| `AWS_PROFILE` / `AWS_REGION` / `SES_FROM_EMAIL`                          | unset / `us-east-1` / req.      | AWS SES email settings                                           |
-| `S3_BUCKET` / `S3_REGION` / `S3_ENDPOINT` / `STORAGE_LOCAL_DIR`          | unset / `./data/uploads`        | S3-compatible asset storage or signed local disk storage         |
+| `S3_BUCKET` / `S3_REGION` / `S3_ENDPOINT` / `S3_FORCE_PATH_STYLE`        | required / `us-east-1`          | S3-compatible object storage configuration                       |
 | `ORCHESTRATOR_PROVIDERS` / `ORCHESTRATOR_ALLOW_OVERRIDES`                | `runpod,vastai,local` / `false` | Ordered GPU provider failover list and override toggle           |
 | `RUNPOD_API_KEY` / `RUNPOD_API_URL` / `RUNPOD_CLOUD_TYPE`                | unset / v2 / `SECURE`           | RunPod REST v2 credentials and placement options                 |
 | `VASTAI_API_KEY` / `VASTAI_API_URL` / `VASTAI_MAX_PRICE_PER_HR`          | unset / v0 / unset              | Vast.ai REST v0 credentials and price/proxy options              |
@@ -106,6 +103,16 @@ Run from the repository root:
 | `pnpm --filter @metamorph/api test`                | Run API test suite               |
 | `pnpm --filter @metamorph/api typecheck`           | Run `tsc --noEmit`               |
 | `pnpm format:check && pnpm lint && pnpm typecheck` | Full repo verification from root |
+
+### Docker
+
+Build the production image from the **repository root** using [`apps/api/Dockerfile`](../apps/api/Dockerfile) (and [`apps/api/Dockerfile.dockerignore`](../apps/api/Dockerfile.dockerignore), which keeps the root `.dockerignore` scoped to `engine-py`):
+
+```bash
+docker build -f apps/api/Dockerfile -t metamorph-api .
+```
+
+The image uses `turbo prune @metamorph/api --docker` to install only `@metamorph/api`, `@metamorph/orchestrator`, and `@metamorph/shared` dependencies and runs `node dist/index.js` on port `3001` as a non-root user.
 
 ## Effect v4 Reference Docs
 

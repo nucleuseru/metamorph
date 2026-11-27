@@ -1,12 +1,10 @@
-"""Asymmetric EdDSA (Ed25519) JWT authentication for HTTP and WebSocket routes."""
+"""Asymmetric EdDSA (Ed25519) JWKS-based JWT authentication for HTTP and WebSocket routes."""
 
 from __future__ import annotations
 
 from typing import Annotated, Any
 
 import jwt
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from fastapi import Depends, HTTPException, Request
 from jwt.exceptions import InvalidTokenError, PyJWKClientError, PyJWKError
 from pydantic import BaseModel
@@ -37,17 +35,8 @@ class JWTClaims(BaseModel):
     modalities: tuple[Modality, ...]
 
 
-def _load_ed25519_key(pem: str) -> Ed25519PublicKey | None:
-    if not pem:
-        return None
-    loaded = load_pem_public_key(pem.encode("utf-8"))
-    if not isinstance(loaded, Ed25519PublicKey):
-        raise ValueError("ENGINE_JWT_PUBLIC_KEY must be an Ed25519 public key in PEM format.")
-    return loaded
-
-
 class JWTAuthenticator:
-    """Verifies EdDSA JWTs against instance identity, user binding, and modalities."""
+    """Verifies EdDSA JWTs via JWKS against instance identity, user binding, and modalities."""
 
     def __init__(
         self,
@@ -56,9 +45,6 @@ class JWTAuthenticator:
         jwk_client: jwt.PyJWKClient | None = None,
     ) -> None:
         self._settings = settings
-        self._public_key: Ed25519PublicKey | None = _load_ed25519_key(
-            settings.normalized_jwt_public_key
-        )
         self._jwk_client: jwt.PyJWKClient | None = jwk_client
         if self._jwk_client is None and settings.jwt_jwks_url:
             self._jwk_client = jwt.PyJWKClient(
@@ -80,8 +66,8 @@ class JWTAuthenticator:
 
     def verify_token(self, token: str) -> JWTClaims:
         """Decode and validate an EdDSA JWT, returning parsed `JWTClaims`."""
-        if self._jwk_client is None and self._public_key is None:
-            raise AuthError(401, 4001, "JWT verification is not configured on this instance.")
+        if self._jwk_client is None:
+            raise AuthError(401, 4001, "JWKS verification is not configured on this instance.")
         if not token or not token.strip():
             raise AuthError(401, 4001, "Missing JWT token.")
         token = token.strip()
@@ -98,8 +84,6 @@ class JWTAuthenticator:
         }
         if self._settings.jwt_audience:
             decode_kwargs["audience"] = self._settings.jwt_audience
-        elif self._jwk_client is None and self._settings.instance_id:
-            decode_kwargs["audience"] = self._settings.instance_id
         else:
             decode_kwargs["options"]["verify_aud"] = False
         if self._settings.jwt_issuer:
@@ -141,9 +125,9 @@ class JWTAuthenticator:
         )
 
     def _resolve_signing_key(self, token: str) -> Any:
-        """Pick the verification key: JWKS (by `kid`) when configured, else static PEM."""
+        """Pick the verification key from JWKS by `kid`."""
         if self._jwk_client is None:
-            return self._public_key
+            raise AuthError(401, 4001, "JWKS verification is not configured on this instance.")
         try:
             return self._jwk_client.get_signing_key_from_jwt(token).key
         except (PyJWKClientError, PyJWKError, InvalidTokenError) as exc:

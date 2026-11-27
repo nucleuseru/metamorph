@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import { after, describe, test } from "node:test";
 
-import { SendEmailCommand } from "@aws-sdk/client-sesv2";
 import { NodeCrypto, NodeWS } from "@effect/platform-node";
-import { renderPasswordResetEmail, renderVerificationEmail } from "@metamorph/email";
 import {
   EngineClient,
   EngineOrchestrator,
@@ -20,57 +18,11 @@ import { Pool } from "pg";
 
 import { createAuth, createDrizzleDatabase } from "./auth.ts";
 import { schema } from "./db/schema.ts";
+import { AssetRepository, PersonaRepository, UsageRepository } from "./repositories/index.ts";
 import { AppRoutes } from "./server.ts";
 import { Auth, makeAuthShape } from "./services/auth.ts";
-import { createSesEmailSender } from "./services/email.ts";
 import { EngineTokenService } from "./services/engine-tokens.ts";
-import { AssetRepository, PersonaRepository, UsageRepository } from "./services/repositories.ts";
 import { ObjectStorage } from "./services/storage.ts";
-
-describe("SES email sender", () => {
-  test("builds a SendEmail command", async () => {
-    const sent: Array<SendEmailCommand> = [];
-    const send = createSesEmailSender({
-      fromEmail: "noreply@example.com",
-      client: {
-        send: async (command: unknown) => {
-          sent.push(command as SendEmailCommand);
-          return {} as never;
-        },
-      } as never,
-    });
-
-    await send({ to: "a@b.co", subject: "Hi", text: "plain", html: "<b>html</b>" });
-
-    assert.equal(sent.length, 1);
-    const input = sent[0]!.input;
-    assert.equal(input.FromEmailAddress, "noreply@example.com");
-    assert.deepEqual(input.Destination?.ToAddresses, ["a@b.co"]);
-    assert.equal(input.Content?.Simple?.Subject?.Data, "Hi");
-    assert.equal(input.Content?.Simple?.Body?.Text?.Data, "plain");
-    assert.equal(input.Content?.Simple?.Body?.Html?.Data, "<b>html</b>");
-  });
-
-  test("React Email templates render HTML and plain text with escaped props", async () => {
-    const verify = await renderVerificationEmail({
-      name: "<Eve>",
-      url: "https://example.com/verify?a=1&b=2",
-    });
-    assert.equal(verify.subject, "Verify your Metamorph email address");
-    assert.match(verify.html, /<!DOCTYPE html/);
-    assert.match(verify.html, /&lt;Eve&gt;/);
-    assert.match(verify.html, /https:\/\/example\.com\/verify\?a=1(&amp;|&)b=2/);
-    assert.match(verify.text, /https:\/\/example\.com\/verify\?a=1&b=2/);
-
-    const reset = await renderPasswordResetEmail({
-      name: "Ada",
-      url: "https://example.com/reset",
-    });
-    assert.equal(reset.subject, "Reset your Metamorph password");
-    assert.match(reset.html, /<!DOCTYPE html/);
-    assert.match(reset.text, /https:\/\/example\.com\/reset/);
-  });
-});
 
 describe("HTTP routes", () => {
   const instance = createAuth({
@@ -78,7 +30,6 @@ describe("HTTP routes", () => {
     secret: "test-secret-test-secret-test-secret-123456",
     baseUrl: "http://localhost:3001",
     trustedOrigins: ["http://localhost:3000"],
-    sendEmail: async () => {},
     googleClientId: "google-id",
     googleClientSecret: "google-secret",
     jwtIssuer: "http://localhost:3001",
@@ -151,6 +102,22 @@ describe("HTTP routes", () => {
     const body = (await signIn.json()) as { url?: string };
     assert.match(body.url ?? "", /accounts\.google\.com/);
   });
+
+  test("rejects disabled email/password auth endpoints", async () => {
+    const signUp = await handler(
+      new Request("http://localhost:3001/api/auth/sign-up/email", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+        body: JSON.stringify({
+          email: "user@example.com",
+          password: "password123",
+          name: "Test User",
+        }),
+      }),
+      services,
+    );
+    assert.equal(signUp.status, 400);
+  });
 });
 
 describe("Drizzle schema and Better Auth adapter", () => {
@@ -174,7 +141,6 @@ describe("Drizzle schema and Better Auth adapter", () => {
         secret: "test-secret-test-secret-test-secret-123456",
         baseUrl: "http://localhost:3001",
         trustedOrigins: ["http://localhost:3000"],
-        sendEmail: async () => {},
         jwtIssuer: "http://localhost:3001",
         jwtAudience: "http://localhost:3001",
         jwtExpirationTime: "15m",

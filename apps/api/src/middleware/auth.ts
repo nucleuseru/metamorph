@@ -3,13 +3,14 @@ import { HttpServerRequest } from "effect/http";
 import { HttpApiMiddleware } from "effect/http-api";
 
 import type { AuthSession } from "../auth.ts";
+import { toHeaders } from "../lib/headers.ts";
 import { Auth } from "../services/auth.ts";
 
 export class CurrentSession extends Context.Service<CurrentSession, AuthSession>()(
   "@metamorph/api/middleware/CurrentSession",
 ) {}
 
-export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
+class Unauthorized extends Schema.TaggedError<Unauthorized, { readonly brand: unique symbol }>()(
   "Unauthorized",
   { message: Schema.String },
   { httpApiStatus: 401 },
@@ -33,10 +34,7 @@ export const AuthMiddlewareLayer = Layer.effect(
     return AuthMiddleware.of((httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
-        const headers = new Headers();
-        for (const [key, value] of Object.entries(request.headers)) {
-          if (typeof value === "string") headers.set(key, value);
-        }
+        const headers = toHeaders(request.headers);
         const session = yield* auth
           .getSession(headers)
           .pipe(

@@ -4,6 +4,7 @@ import { Effect, Fiber } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { Socket } from "effect/socket";
 
+import { toHeaders } from "../lib/headers.ts";
 import { Auth } from "../services/auth.ts";
 import { EngineTokenService } from "../services/engine-tokens.ts";
 
@@ -66,11 +67,9 @@ export const SessionWsRelayRoute = HttpRouter.use((router) =>
         }
 
         if (userId === null) {
-          const headers = new Headers();
-          for (const [key, value] of Object.entries(request.headers)) {
-            if (typeof value === "string") headers.set(key, value);
-          }
-          const session = yield* auth.getSession(headers).pipe(Effect.orElseSucceed(() => null));
+          const session = yield* auth
+            .getSession(toHeaders(request.headers))
+            .pipe(Effect.orElseSucceed(() => null));
           userId = session?.user.id ?? null;
         }
 

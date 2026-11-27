@@ -29,7 +29,7 @@ const cleanOption = (opt: Option.Option<string>): string | undefined => {
  * Wraps `OrchestratorConfig.layer` so `webhookBaseUrl` defaults to `API_PUBLIC_URL`
  * or `BETTER_AUTH_URL` when `ORCHESTRATOR_WEBHOOK_BASE_URL` is unset.
  */
-export const AppOrchestratorConfigLayer = Layer.effect(
+const AppOrchestratorConfigLayer = Layer.effect(
   OrchestratorConfig,
   Effect.gen(function* () {
     const base = yield* OrchestratorConfig;
@@ -50,7 +50,7 @@ export const AppOrchestratorConfigLayer = Layer.effect(
 ).pipe(Layer.provide(OrchestratorConfig.layer));
 
 /** Builds the ordered `ProviderRegistry` from environment configuration. */
-export const AppProviderRegistryLayer = Layer.effect(
+const AppProviderRegistryLayer = Layer.effect(
   ProviderRegistry,
   Effect.gen(function* () {
     const orderRaw = yield* Config.String("ORCHESTRATOR_PROVIDERS").pipe(

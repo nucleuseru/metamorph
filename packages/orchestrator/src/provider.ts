@@ -48,7 +48,7 @@ export interface GpuProvider {
     providerInstanceId: string,
   ) => Effect.Effect<ProviderInstanceStatus, ProviderUnavailableError>;
   readonly terminate: (providerInstanceId: string) => Effect.Effect<void, ProviderUnavailableError>;
-  readonly listManaged: () => Effect.Effect<
+  readonly listManaged: Effect.Effect<
     ReadonlyArray<ManagedProviderInstance>,
     ProviderUnavailableError
   >;
@@ -59,7 +59,7 @@ export interface ProviderRegistryShape {
   readonly get: (name: ProviderName) => GpuProvider | undefined;
   readonly provisionWithFailover: (
     request: ProvisionRequest,
-    preferredProvider?: ProviderName | undefined,
+    preferredProvider?: ProviderName,
   ) => Effect.Effect<ProvisionedInstance, NoCapacityError | ProviderUnavailableError>;
 }
 
@@ -81,7 +81,7 @@ export function makeProviderRegistry(providers: ReadonlyArray<GpuProvider>): Pro
     get: (name) => byName.get(name),
     provisionWithFailover: Effect.fn("ProviderRegistry.provisionWithFailover")(function* (
       request: ProvisionRequest,
-      preferredProvider?: ProviderName | undefined,
+      preferredProvider?: ProviderName,
     ) {
       if (preferredProvider !== undefined) {
         const provider = byName.get(preferredProvider);

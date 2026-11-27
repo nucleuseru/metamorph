@@ -29,7 +29,7 @@ const RunPodPod = Schema.Struct({
   desiredStatus: Schema.optionalKey(Schema.NullOr(Schema.String)),
   runtimeStatus: Schema.optionalKey(Schema.NullOr(Schema.String)),
   runtimeStatusReason: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  costPerHr: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  costPerHr: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   createdAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   gpu: Schema.optionalKey(Schema.NullOr(RunPodGpuInfo)),
 });
@@ -286,70 +286,68 @@ export const makeRunPodProvider = Effect.fn("makeRunPodProvider")(function* (con
     });
   });
 
-  const listManaged: GpuProvider["listManaged"] = Effect.fn("RunPodProvider.listManaged")(
-    function* () {
-      const response = yield* client.get("/pods").pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderUnavailableError({
-              provider: "runpod",
-              message: `RunPod GET /pods failed: ${cause.message}`,
-              retryable: true,
-              cause,
-            }),
-        ),
-      );
-      if (response.status < 200 || response.status >= 300) {
-        return yield* new ProviderUnavailableError({
-          provider: "runpod",
-          message: `RunPod GET /pods returned HTTP ${response.status}`,
-          retryable: response.status === 429 || response.status >= 500,
-        });
-      }
+  const listManaged: GpuProvider["listManaged"] = Effect.gen(function* () {
+    const response = yield* client.get("/pods").pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderUnavailableError({
+            provider: "runpod",
+            message: `RunPod GET /pods failed: ${cause.message}`,
+            retryable: true,
+            cause,
+          }),
+      ),
+    );
+    if (response.status < 200 || response.status >= 300) {
+      return yield* new ProviderUnavailableError({
+        provider: "runpod",
+        message: `RunPod GET /pods returned HTTP ${response.status}`,
+        retryable: response.status === 429 || response.status >= 500,
+      });
+    }
 
-      const rawJson = yield* response.json.pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderUnavailableError({
-              provider: "runpod",
-              message: `Invalid JSON from RunPod GET /pods: ${cause.message}`,
-              retryable: true,
-              cause,
-            }),
-        ),
-      );
-      const parsed = yield* decodeRunPodList(rawJson).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderUnavailableError({
-              provider: "runpod",
-              message: `Unexpected RunPod list schema: ${cause.message}`,
-              retryable: false,
-              cause,
-            }),
-        ),
-      );
+    const rawJson = yield* response.json.pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderUnavailableError({
+            provider: "runpod",
+            message: `Invalid JSON from RunPod GET /pods: ${cause.message}`,
+            retryable: true,
+            cause,
+          }),
+      ),
+    );
+    const parsed = yield* decodeRunPodList(rawJson).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderUnavailableError({
+            provider: "runpod",
+            message: `Unexpected RunPod list schema: ${cause.message}`,
+            retryable: false,
+            cause,
+          }),
+      ),
+    );
 
-      const pods = "pods" in parsed ? parsed.pods : parsed;
-      const managed: Array<ManagedProviderInstance> = [];
-      for (const pod of pods) {
-        const instanceId = extractInstanceIdFromName(pod.name);
-        if (instanceId === null) continue;
-        const createdAtMs =
-          pod.createdAt && !Number.isNaN(Date.parse(pod.createdAt))
-            ? Date.parse(pod.createdAt)
-            : null;
-        managed.push({
-          provider: "runpod",
-          providerInstanceId: pod.id,
-          instanceId,
-          status: mapRunPodStatus(pod),
-          createdAtMs,
-        });
-      }
-      return managed;
-    },
-  );
+    const pods = "pods" in parsed ? parsed.pods : parsed;
+    const managed: Array<ManagedProviderInstance> = [];
+    for (const pod of pods) {
+      const instanceId = extractInstanceIdFromName(pod.name);
+      if (instanceId === null) continue;
+      const createdAtMs =
+        pod.createdAt && !Number.isNaN(Date.parse(pod.createdAt))
+          ? Date.parse(pod.createdAt)
+          : null;
+      managed.push({
+        provider: "runpod",
+        providerInstanceId: pod.id,
+        instanceId,
+        status: mapRunPodStatus(pod),
+        createdAtMs,
+      });
+    }
+    return managed;
+  }).pipe(Effect.withSpan("RunPodProvider.listManaged"));
 
   const provider: GpuProvider = {
     name: "runpod",

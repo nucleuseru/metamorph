@@ -30,7 +30,7 @@ export const engineSigningKey = pgTable("engine_signing_key", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-/** Uploaded reference images and voice clips stored in S3 or local ObjectStorage. */
+/** Uploaded reference images and voice clips stored in S3 ObjectStorage. */
 export const mediaAsset = pgTable(
   "media_asset",
   {

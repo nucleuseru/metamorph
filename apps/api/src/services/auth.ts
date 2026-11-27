@@ -2,12 +2,14 @@ import { Config, Context, Effect, Layer, Option, Redacted, Schema } from "effect
 import { Pool } from "pg";
 
 import { createAuth, createDrizzleDatabase, type AuthInstance, type AuthSession } from "../auth.ts";
-import { EmailService } from "./email.ts";
 
-export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
-  message: Schema.String,
-  cause: Schema.Defect(),
-}) {}
+class AuthError extends Schema.TaggedError<AuthError, { readonly brand: unique symbol }>()(
+  "AuthError",
+  {
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
 export interface AuthShape {
   readonly instance: AuthInstance;
@@ -38,8 +40,6 @@ export class Auth extends Context.Service<Auth, AuthShape>()("@metamorph/api/ser
   static readonly layer = Layer.effect(
     Auth,
     Effect.gen(function* () {
-      const email = yield* EmailService;
-
       const databaseUrl = yield* Config.Redacted("DATABASE_URL");
       const secret = yield* Config.Redacted("BETTER_AUTH_SECRET");
       const baseUrl = yield* Config.String("BETTER_AUTH_URL").pipe(
@@ -66,7 +66,6 @@ export class Auth extends Context.Service<Auth, AuthShape>()("@metamorph/api/ser
         secret: Redacted.value(secret),
         baseUrl,
         trustedOrigins: parseOrigins(trustedOrigins),
-        sendEmail: (message) => Effect.runPromise(email.send(message)),
         googleClientId: Option.getOrUndefined(googleClientId),
         googleClientSecret: Option.map(googleClientSecret, Redacted.value).pipe(
           Option.getOrUndefined,
@@ -81,7 +80,7 @@ export class Auth extends Context.Service<Auth, AuthShape>()("@metamorph/api/ser
   );
 }
 
-export const parseOrigins = (value: string): ReadonlyArray<string> =>
+const parseOrigins = (value: string): ReadonlyArray<string> =>
   value
     .split(",")
     .map((origin) => origin.trim())

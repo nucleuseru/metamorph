@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import io
@@ -14,6 +15,7 @@ from typing import Any
 import httpx
 import jwt
 import numpy as np
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from metamorph_engine.config import EngineSettings
@@ -34,9 +36,29 @@ def generate_ed25519_keypair() -> tuple[Ed25519PrivateKey, str]:
     return private_key, public_pem
 
 
+def jwks_for(private_key: Ed25519PrivateKey, kid: str = "key-1") -> dict[str, Any]:
+    """Build a JWKS payload containing the Ed25519 public key for `kid`."""
+    raw = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    x = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    return {"keys": [{"kty": "OKP", "crv": "Ed25519", "alg": "EdDSA", "kid": kid, "x": x}]}
+
+
+@pytest.fixture
+def jwks_signer(monkeypatch: pytest.MonkeyPatch) -> Ed25519PrivateKey:
+    """Generate an Ed25519 keypair and serve its public JWK via PyJWKClient."""
+    private_key, _ = generate_ed25519_keypair()
+    jwks = jwks_for(private_key, "key-1")
+    monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", lambda self: jwks)
+    return private_key
+
+
 def mint_jwt(
     private_key: Ed25519PrivateKey,
     *,
+    kid: str | None = "key-1",
     sub: str = "user-1",
     aud: str | None = "inst-1",
     iss: str | None = None,
@@ -56,7 +78,8 @@ def mint_jwt(
         payload["iss"] = iss
     if modalities is not None:
         payload["modalities"] = modalities
-    return jwt.encode(payload, private_key, algorithm="EdDSA")
+    headers = {"kid": kid} if kid is not None else None
+    return jwt.encode(payload, private_key, algorithm="EdDSA", headers=headers)
 
 
 def make_wav_bytes(
@@ -165,16 +188,13 @@ class StaticAssetTransport(httpx.AsyncBaseTransport):
         )
 
 
-def build_test_settings(
-    public_pem: str,
-    **overrides: Any,
-) -> EngineSettings:
+def build_test_settings(**overrides: Any) -> EngineSettings:
     """Build fast CPU mock settings for unit & integration tests."""
     defaults: dict[str, Any] = {
         "backend": "mock",
         "instance_id": "inst-1",
         "user_id": "user-1",
-        "jwt_public_key": public_pem,
+        "jwt_jwks_url": "https://api.example.test/.well-known/engine-jwks.json",
         "enable_voice": True,
         "enable_video": True,
         "startup_idle_timeout_s": 10.0,

@@ -13,10 +13,11 @@ import {
   PayloadTooLarge,
   UnprocessableEntity,
   type MediaAssetResponse,
-} from "../api.ts";
+} from "../api/index.ts";
 import { CurrentSession } from "../middleware/auth.ts";
-import { AssetRepository, type MediaAssetRecord } from "../services/repositories.ts";
+import { AssetRepository, type MediaAssetRecord } from "../repositories/index.ts";
 import { ObjectStorage } from "../services/storage.ts";
+import { mapMultipartError } from "./helpers.ts";
 
 const MAX_REF_IMAGE_BYTES = 15 * 1024 * 1024;
 const MAX_REF_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -102,17 +103,7 @@ export const AssetsHandlers = HttpApiBuilder.group(
                 fileBytes = yield* part.contentEffect;
               }
             }),
-          ).pipe(
-            Effect.mapError((err) => {
-              if (
-                err._tag === "MultipartError" &&
-                (err.reason._tag === "FileTooLarge" || err.reason._tag === "BodyTooLarge")
-              ) {
-                return new PayloadTooLarge({ message: `Asset upload too large: ${err.message}` });
-              }
-              return new BadRequest({ message: `Invalid multipart upload: ${err.message}` });
-            }),
-          );
+          ).pipe(Effect.mapError((err) => mapMultipartError(err, "Asset upload too large")));
 
           if (!kindValue) {
             return yield* new BadRequest({ message: "Missing required multipart field 'kind'." });
@@ -227,7 +218,7 @@ export const AssetsHandlers = HttpApiBuilder.group(
   }),
 );
 
-/** Signed content-serving route for local/memory `ObjectStorage` URLs (`GET /assets/:id/content`). */
+/** Signed content-serving route for in-memory test `ObjectStorage` URLs (`GET /assets/:id/content`). */
 export const AssetContentRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const storage = yield* ObjectStorage;

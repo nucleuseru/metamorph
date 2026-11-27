@@ -34,7 +34,7 @@ export const VideoStartConfig = Schema.Struct({
   detection_mode: Schema.optionalKey(Schema.NullOr(DetectionMode)),
   use_pe: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
   freeze_kv_on_static: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
-  static_diff_thresh: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  static_diff_thresh: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   kv_reset_frames: Schema.optionalKey(Schema.NullOr(Schema.Int)),
 });
 export type VideoStartConfig = typeof VideoStartConfig.Type;
@@ -46,9 +46,9 @@ export const AudioStartConfig = Schema.Struct({
   input_sample_rate: Schema.optionalKey(Schema.Int),
   output_sample_rate: Schema.optionalKey(Schema.Int),
   diffusion_steps: Schema.optionalKey(Schema.NullOr(Schema.Int)),
-  cfg_rate: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-  block_time_s: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-  vad_threshold_db: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  cfg_rate: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  block_time_s: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  vad_threshold_db: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   passthrough: Schema.optionalKey(Schema.Boolean),
 });
 export type AudioStartConfig = typeof AudioStartConfig.Type;
@@ -77,12 +77,12 @@ export type BootstrapStatus = typeof BootstrapStatus.Type;
 
 export const SyncTelemetry = Schema.Struct({
   sync_active: Schema.Boolean,
-  video_latency_ms: Schema.Number,
-  audio_latency_ms: Schema.Number,
-  target_latency_ms: Schema.Number,
-  offset_ms: Schema.Number,
-  audio_hold_ms: Schema.Number,
-  video_hold_ms: Schema.Number,
+  video_latency_ms: Schema.Finite,
+  audio_latency_ms: Schema.Finite,
+  target_latency_ms: Schema.Finite,
+  offset_ms: Schema.Finite,
+  audio_hold_ms: Schema.Finite,
+  video_hold_ms: Schema.Finite,
 });
 export type SyncTelemetry = typeof SyncTelemetry.Type;
 
@@ -109,8 +109,8 @@ export const EngineSessionStatusResponse = Schema.Struct({
   enabled_modalities: Schema.Array(Modality),
   connected: Schema.Boolean,
   active_session_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  disconnect_countdown_s: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-  idle_countdown_s: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  disconnect_countdown_s: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+  idle_countdown_s: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   assets: BootstrapStatus,
   sync: SyncTelemetry,
 });
@@ -213,7 +213,7 @@ export const EngineWsServerStartedMessage = Schema.Struct({
       output_codec: AudioCodecName,
       input_sample_rate: Schema.Int,
       output_sample_rate: Schema.Int,
-      block_time_s: Schema.Number,
+      block_time_s: Schema.Finite,
     }),
   ),
   assets: BootstrapStatus,
@@ -229,7 +229,7 @@ export const EngineWsServerConfigUpdatedMessage = Schema.Struct({
 export const EngineWsServerPongMessage = Schema.Struct({
   type: Schema.Literal("pong"),
   t: Schema.optionalKey(Schema.Unknown),
-  ts: Schema.Number,
+  ts: Schema.Finite,
 });
 
 export const EngineWsServerSyncStatsMessage = Schema.Struct({
@@ -239,12 +239,12 @@ export const EngineWsServerSyncStatsMessage = Schema.Struct({
   frames_out_video: Schema.Int,
   frames_out_audio: Schema.Int,
   sync_active: Schema.Boolean,
-  video_latency_ms: Schema.Number,
-  audio_latency_ms: Schema.Number,
-  target_latency_ms: Schema.Number,
-  offset_ms: Schema.Number,
-  audio_hold_ms: Schema.Number,
-  video_hold_ms: Schema.Number,
+  video_latency_ms: Schema.Finite,
+  audio_latency_ms: Schema.Finite,
+  target_latency_ms: Schema.Finite,
+  offset_ms: Schema.Finite,
+  audio_hold_ms: Schema.Finite,
+  video_hold_ms: Schema.Finite,
 });
 
 export const EngineWsServerWaitingFaceMessage = Schema.Struct({
@@ -295,30 +295,30 @@ export type EngineWsServerMessage = typeof EngineWsServerMessage.Type;
 export const EngineWebhookReadyEvent = Schema.Struct({
   event: Schema.Literal("ready"),
   instance_id: Schema.String,
-  timestamp: Schema.Number,
+  timestamp: Schema.Finite,
   enabled_modalities: Schema.optionalKey(Schema.Array(Modality)),
 });
 
 export const EngineWebhookConnectedEvent = Schema.Struct({
   event: Schema.Literal("connected"),
   instance_id: Schema.String,
-  timestamp: Schema.Number,
+  timestamp: Schema.Finite,
   user_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
 export const EngineWebhookDisconnectedEvent = Schema.Struct({
   event: Schema.Literal("disconnected"),
   instance_id: Schema.String,
-  timestamp: Schema.Number,
+  timestamp: Schema.Finite,
   user_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   reason: Schema.optionalKey(Schema.String),
-  disconnect_timeout_s: Schema.optionalKey(Schema.Number),
+  disconnect_timeout_s: Schema.optionalKey(Schema.Finite),
 });
 
 export const EngineWebhookShuttingDownEvent = Schema.Struct({
   event: Schema.Literal("shutting_down"),
   instance_id: Schema.String,
-  timestamp: Schema.Number,
+  timestamp: Schema.Finite,
   user_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   reason: Schema.optionalKey(Schema.String),
 });

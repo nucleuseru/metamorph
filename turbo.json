@@ -1,5 +1,8 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
+  "futureFlags": {
+    "experimentalPythonWorkspaces": true
+  },
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -10,6 +13,9 @@
     },
     "test": {
       "dependsOn": ["^build"]
+    },
+    "metamorph-python#test": {
+      "dependsOn": []
     },
     "dev": {
       "persistent": true,

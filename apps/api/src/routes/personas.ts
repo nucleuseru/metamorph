@@ -2,14 +2,11 @@ import { Effect } from "effect";
 import { SecureRandom } from "effect/crypto";
 import { HttpApiBuilder } from "effect/http-api";
 
-import { Api, NotFound, UnprocessableEntity, type PersonaResponse } from "../api.ts";
+import { Api, NotFound, type PersonaResponse } from "../api/index.ts";
 import { CurrentSession } from "../middleware/auth.ts";
-import {
-  AssetRepository,
-  PersonaRepository,
-  type PersonaRecord,
-} from "../services/repositories.ts";
+import { AssetRepository, PersonaRepository, type PersonaRecord } from "../repositories/index.ts";
 import { ObjectStorage } from "../services/storage.ts";
+import { assertOwnedAsset } from "./helpers.ts";
 
 export const PersonasHandlers = HttpApiBuilder.group(
   Api,
@@ -52,24 +49,14 @@ export const PersonasHandlers = HttpApiBuilder.group(
       };
     });
 
-    const validateAssetOwnership = Effect.fnUntraced(function* (
+    const validateAssetOwnership = (
       userId: string,
       assetId: string | null | undefined,
       expectedKind: "ref_image" | "ref_audio",
-    ) {
-      if (!assetId) return;
-      const found = yield* assets.getByIdForUser(assetId, userId).pipe(Effect.orDie);
-      if (!found) {
-        return yield* new NotFound({
-          message: `Referenced ${expectedKind} asset '${assetId}' not found.`,
-        });
-      }
-      if (found.kind !== expectedKind) {
-        return yield* new UnprocessableEntity({
-          message: `Asset '${assetId}' has kind '${found.kind}', expected '${expectedKind}'.`,
-        });
-      }
-    });
+    ) =>
+      assetId
+        ? assertOwnedAsset(assets, userId, assetId, expectedKind).pipe(Effect.asVoid)
+        : Effect.void;
 
     return handlers.handleAll({
       create: ({ payload }) =>

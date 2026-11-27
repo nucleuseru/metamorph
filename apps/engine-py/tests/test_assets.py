@@ -9,7 +9,6 @@ from metamorph_engine.assets import AssetError, AssetLoader
 from tests.conftest import (
     StaticAssetTransport,
     build_test_settings,
-    generate_ed25519_keypair,
     make_jpeg_bytes,
     make_wav_bytes,
 )
@@ -17,7 +16,6 @@ from tests.conftest import (
 
 @pytest.mark.asyncio
 async def test_asset_loader_decodes_and_resamples() -> None:
-    _, pub_pem = generate_ed25519_keypair()
     wav_48k_stereo = make_wav_bytes(freq_hz=440.0, duration_s=0.2, sr=48000, channels=2)
     jpeg = make_jpeg_bytes(width=80, height=60, color=(200, 100, 50))
     transport = StaticAssetTransport(
@@ -26,7 +24,7 @@ async def test_asset_loader_decodes_and_resamples() -> None:
             "https://assets.example.com/ref.jpg": jpeg,
         }
     )
-    settings = build_test_settings(pub_pem, allowed_asset_hosts="assets.example.com")
+    settings = build_test_settings(allowed_asset_hosts="assets.example.com")
     loader = AssetLoader(settings, http_transport=transport)
 
     img = await loader.load_ref_image(url="https://assets.example.com/ref.jpg")
@@ -49,9 +47,7 @@ async def test_asset_loader_decodes_and_resamples() -> None:
 
 @pytest.mark.asyncio
 async def test_asset_loader_enforces_allowlist_and_limits() -> None:
-    _, pub_pem = generate_ed25519_keypair()
     settings = build_test_settings(
-        pub_pem,
         allowed_asset_hosts="cdn.example.com",
         max_ref_image_bytes=2048,
     )

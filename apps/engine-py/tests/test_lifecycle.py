@@ -7,6 +7,7 @@ import threading
 import time
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from metamorph_engine.lifecycle import LifecycleState
 from metamorph_engine.main import create_app
@@ -14,13 +15,11 @@ from starlette.websockets import WebSocketDisconnect
 from tests.conftest import (
     WebhookRecorder,
     build_test_settings,
-    generate_ed25519_keypair,
     mint_jwt,
 )
 
 
 def test_readiness_and_startup_idle_shutdown_fires_signed_webhook() -> None:
-    _priv, pub_pem = generate_ed25519_keypair()
     recorder = WebhookRecorder(secret="webhook-secret")
     shutdown_called = False
 
@@ -29,7 +28,6 @@ def test_readiness_and_startup_idle_shutdown_fires_signed_webhook() -> None:
         shutdown_called = True
 
     settings = build_test_settings(
-        pub_pem,
         startup_idle_timeout_s=0.25,
         disconnect_timeout_s=0.25,
         lifecycle_webhook_url="https://api.example.com/webhooks/engine",
@@ -65,8 +63,9 @@ def test_readiness_and_startup_idle_shutdown_fires_signed_webhook() -> None:
     assert recorder.events[1].payload["reason"] == "startup_idle_timeout"
 
 
-def test_disconnect_grace_timeout_and_reconnect_cancellation() -> None:
-    priv, pub_pem = generate_ed25519_keypair()
+def test_disconnect_grace_timeout_and_reconnect_cancellation(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
     recorder = WebhookRecorder(secret="hook-secret")
     shutdown_called = False
 
@@ -75,7 +74,6 @@ def test_disconnect_grace_timeout_and_reconnect_cancellation() -> None:
         shutdown_called = True
 
     settings = build_test_settings(
-        pub_pem,
         startup_idle_timeout_s=5.0,
         disconnect_timeout_s=0.35,
         lifecycle_webhook_url="https://api.example.com/hooks",
@@ -86,7 +84,7 @@ def test_disconnect_grace_timeout_and_reconnect_cancellation() -> None:
         shutdown_callback=_on_shutdown,
         webhook_transport=recorder,
     )
-    token = mint_jwt(priv, modalities=["voice", "video"])
+    token = mint_jwt(jwks_signer, modalities=["voice", "video"])
 
     with TestClient(app) as client:
         # Connect and disconnect, then reconnect BEFORE 0.35s grace expires
@@ -118,8 +116,9 @@ def test_disconnect_grace_timeout_and_reconnect_cancellation() -> None:
     assert events[-1] == "shutting_down"
 
 
-def test_single_user_takeover_closes_stale_socket_without_disconnect_countdown() -> None:
-    priv, pub_pem = generate_ed25519_keypair()
+def test_single_user_takeover_closes_stale_socket_without_disconnect_countdown(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
     recorder = WebhookRecorder()
     shutdown_called = False
 
@@ -128,7 +127,6 @@ def test_single_user_takeover_closes_stale_socket_without_disconnect_countdown()
         shutdown_called = True
 
     settings = build_test_settings(
-        pub_pem,
         startup_idle_timeout_s=5.0,
         disconnect_timeout_s=0.25,
         lifecycle_webhook_url="https://api.example.com/hooks",
@@ -138,7 +136,7 @@ def test_single_user_takeover_closes_stale_socket_without_disconnect_countdown()
         shutdown_callback=_on_shutdown,
         webhook_transport=recorder,
     )
-    token = mint_jwt(priv, modalities=["voice", "video"])
+    token = mint_jwt(jwks_signer, modalities=["voice", "video"])
 
     with TestClient(app) as client, client.websocket_connect("/ws/session") as ws1:
         ws1.send_json({"type": "auth", "token": token})
@@ -173,16 +171,17 @@ def test_single_user_takeover_closes_stale_socket_without_disconnect_countdown()
 
 
 @pytest.mark.asyncio
-async def test_explicit_http_shutdown_triggers_teardown() -> None:
-    priv, pub_pem = generate_ed25519_keypair()
+async def test_explicit_http_shutdown_triggers_teardown(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
     shutdown_event = asyncio.Event()
 
     def _on_shutdown() -> None:
         shutdown_event.set()
 
-    settings = build_test_settings(pub_pem)
+    settings = build_test_settings()
     app = create_app(settings, shutdown_callback=_on_shutdown)
-    token = mint_jwt(priv, modalities=["voice", "video"])
+    token = mint_jwt(jwks_signer, modalities=["voice", "video"])
 
     with TestClient(app) as client:
         resp = client.post(
@@ -197,11 +196,11 @@ async def test_explicit_http_shutdown_triggers_teardown() -> None:
 
 def test_async_startup_serves_health_and_503_ready_while_warming(
     monkeypatch: pytest.MonkeyPatch,
+    jwks_signer: Ed25519PrivateKey,
 ) -> None:
     from metamorph_engine import session as session_mod
 
-    priv, pub_pem = generate_ed25519_keypair()
-    token = mint_jwt(priv, modalities=["voice", "video"])
+    token = mint_jwt(jwks_signer, modalities=["voice", "video"])
 
     warmup_started = threading.Event()
     allow_warmup = threading.Event()
@@ -212,7 +211,7 @@ def test_async_startup_serves_health_and_503_ready_while_warming(
 
     monkeypatch.setattr(session_mod.EngineSessionManager, "load_and_warmup", _gated_warmup)
 
-    settings = build_test_settings(pub_pem, async_startup=True)
+    settings = build_test_settings(async_startup=True)
     app = create_app(settings)
 
     with TestClient(app) as client:
@@ -264,7 +263,6 @@ def test_async_startup_failure_triggers_shutdown_webhook(
 ) -> None:
     from metamorph_engine import session as session_mod
 
-    _priv, pub_pem = generate_ed25519_keypair()
     recorder = WebhookRecorder(secret="hook-secret")
     shutdown_called = threading.Event()
 
@@ -274,7 +272,6 @@ def test_async_startup_failure_triggers_shutdown_webhook(
     monkeypatch.setattr(session_mod.EngineSessionManager, "load_and_warmup", _failing_warmup)
 
     settings = build_test_settings(
-        pub_pem,
         async_startup=True,
         lifecycle_webhook_url="https://api.example.com/hooks",
         lifecycle_webhook_secret="hook-secret",

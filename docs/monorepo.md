@@ -15,7 +15,6 @@ TypeScript packages extend `tsconfig.base.json` and live under `packages/` or `a
 
 - `@metamorph/shared` (`packages/shared-ts`) — Isomorphic 16-byte `!BBHIQ` binary wire protocol and shared Effect Schemas for engine/API communication
 - `@metamorph/orchestrator` (`packages/orchestrator`) — Effect v4 GPU instance orchestrator (`RunPod`, `Vast.ai`, `local`), hardware sizing, engine HTTP client, webhooks, and reconciler
-- `@metamorph/email` (`packages/email`) — React Email templates for verification and password resets
 
 ### Python (`uv`)
 
@@ -59,22 +58,23 @@ pnpm turbo gen py-package --args <name>
 
 ## Task Orchestration (`turbo.json`)
 
-Turborepo manages `build`, `typecheck`, `test`, and `dev`:
+Turborepo enables `futureFlags.experimentalPythonWorkspaces` so it discovers both `pnpm` workspaces and `uv` workspace members (with root `[tool.turbo].name = "metamorph-python"` in `pyproject.toml`):
 
-- `build`: `dependsOn: ["^build"]`, caches `dist/**` and `build/**`
-- `typecheck`: `dependsOn: ["^typecheck"]`
-- `test`: `dependsOn: ["^build"]`
+- `build`: `dependsOn: ["^build"]`, caches `dist/**`, `build/**`, and `.next/**` (and `uv build` for Python packages)
+- `typecheck`: `dependsOn: ["^build", "^typecheck"]` (JS/TS packages); Python typechecking uses Turborepo's built-in `check` / `check:ty` task
+- `test`: `dependsOn: ["^build"]` (with `metamorph-python#test` overriding `dependsOn: []` to run `pytest` across all Python workspace packages)
+- `lint` / `format`: Turborepo's built-in Python tasks map to `ruff check` (`lint:ruff`) and `ruff format` (`format:ruff`)
 - `dev`: `persistent: true`, `cache: false`
 
 ## Root Commands
 
-| Command             | Action                                                                         |
-| :------------------ | :----------------------------------------------------------------------------- |
-| `pnpm lint`         | Run `oxlint` and `uv run ruff check .`                                         |
-| `pnpm format`       | Format all TS/JS/JSON/MD (`oxfmt --write`) and Python (`uv run ruff format .`) |
-| `pnpm format:check` | Check formatting without writing                                               |
-| `pnpm typecheck`    | Run `turbo run typecheck` and `uv run ty check`                                |
-| `pnpm build`        | Run `turbo run build`                                                          |
-| `pnpm test`         | Run `turbo run test`                                                           |
-| `pnpm dev`          | Run `turbo run dev`                                                            |
-| `pnpm gen`          | Run `turbo gen` (`ts-package` or `py-package` generators)                      |
+| Command             | Action                                                                          |
+| :------------------ | :------------------------------------------------------------------------------ |
+| `pnpm lint`         | Run `oxlint` and `turbo run lint:ruff`                                          |
+| `pnpm format`       | Format all TS/JS/JSON/MD (`oxfmt --write`) and Python (`turbo run format:ruff`) |
+| `pnpm format:check` | Check formatting without writing                                                |
+| `pnpm typecheck`    | Run `turbo run typecheck` (TS) and `turbo run check:ty` (Python)                |
+| `pnpm build`        | Run `turbo run build`                                                           |
+| `pnpm test`         | Run `turbo run test`                                                            |
+| `pnpm dev`          | Run `turbo run dev`                                                             |
+| `pnpm gen`          | Run `turbo gen` (`ts-package` or `py-package` generators)                       |

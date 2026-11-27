@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import time
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from metamorph_engine.main import create_app
 from metamorph_engine.protocol import (
@@ -18,7 +19,6 @@ from metamorph_engine.protocol import (
 from tests.conftest import (
     StaticAssetTransport,
     build_test_settings,
-    generate_ed25519_keypair,
     make_jpeg_bytes,
     make_pcm16_chunk,
     make_wav_bytes,
@@ -41,15 +41,15 @@ def _receive_binary_until(ws, *, count: int, timeout_s: float = 2.0):
     return frames, texts
 
 
-def test_voice_only_pod_streams_and_hot_swaps_reference_audio() -> None:
-    priv, pub_pem = generate_ed25519_keypair()
+def test_voice_only_pod_streams_and_hot_swaps_reference_audio(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
     settings = build_test_settings(
-        pub_pem,
         enable_voice=True,
         enable_video=False,
     )
     app = create_app(settings)
-    token = mint_jwt(priv, modalities=["voice"])
+    token = mint_jwt(jwks_signer, modalities=["voice"])
     ref_wav = make_wav_bytes(freq_hz=330.0, duration_s=0.3, sr=22050, amplitude=0.7)
 
     with TestClient(app) as client:
@@ -134,16 +134,16 @@ def test_voice_only_pod_streams_and_hot_swaps_reference_audio() -> None:
             assert swap.json()["hot_swapped"] is True
 
 
-def test_video_only_pod_rv2v_and_hot_swap() -> None:
-    priv, pub_pem = generate_ed25519_keypair()
+def test_video_only_pod_rv2v_and_hot_swap(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
     settings = build_test_settings(
-        pub_pem,
         enable_voice=False,
         enable_video=True,
         mock_video_chunk_frames=2,
     )
     app = create_app(settings)
-    token = mint_jwt(priv, modalities=["video"])
+    token = mint_jwt(jwks_signer, modalities=["video"])
     ref_img = make_jpeg_bytes(width=96, height=96, color=(20, 220, 90))
     frame_jpg = make_jpeg_bytes(width=64, height=48, color=(80, 80, 200))
 
@@ -206,8 +206,9 @@ def test_video_only_pod_rv2v_and_hot_swap() -> None:
         assert bytes(mjpeg_frames[0][1])[:3] == b"\xff\xd8\xff"
 
 
-def test_dual_modality_hybrid_bootstrap_and_synced_stream() -> None:
-    priv, pub_pem = generate_ed25519_keypair()
+def test_dual_modality_hybrid_bootstrap_and_synced_stream(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
     ref_img = make_jpeg_bytes(width=64, height=64, color=(255, 0, 128))
     ref_wav = make_wav_bytes(freq_hz=260.0, duration_s=0.3, sr=22050)
     asset_transport = StaticAssetTransport(
@@ -218,7 +219,6 @@ def test_dual_modality_hybrid_bootstrap_and_synced_stream() -> None:
     )
 
     settings = build_test_settings(
-        pub_pem,
         enable_voice=True,
         enable_video=True,
         initial_prompt="Cyberpunk presenter",
@@ -229,7 +229,7 @@ def test_dual_modality_hybrid_bootstrap_and_synced_stream() -> None:
         mock_audio_latency_ms=5.0,
     )
     app = create_app(settings, asset_transport=asset_transport)
-    token = mint_jwt(priv, modalities=["voice", "video"])
+    token = mint_jwt(jwks_signer, modalities=["voice", "video"])
 
     with TestClient(app) as client:
         status_resp = client.get(

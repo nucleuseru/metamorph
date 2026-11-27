@@ -59,7 +59,7 @@ export const SessionStoppedEvent = Schema.Struct({
   sessionId: Schema.String,
   reason: Schema.NullOr(Schema.String),
   activeSeconds: Schema.Int,
-  estimatedCostUsd: Schema.Number,
+  estimatedCostUsd: Schema.Finite,
   timestamp: Schema.String,
 });
 
@@ -68,7 +68,7 @@ export const SessionFailedEvent = Schema.Struct({
   sessionId: Schema.String,
   reason: Schema.String,
   activeSeconds: Schema.Int,
-  estimatedCostUsd: Schema.Number,
+  estimatedCostUsd: Schema.Finite,
   timestamp: Schema.String,
 });
 
