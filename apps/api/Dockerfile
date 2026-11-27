@@ -34,6 +34,7 @@ RUN turbo prune @metamorph/api --docker
 
 # ---
 FROM base AS builder
+ENV NODE_ENV=development
 COPY --from=prepare /app/out/json/ .
 RUN pnpm install --frozen-lockfile
 
@@ -51,8 +52,12 @@ RUN pnpm prune --prod
 
 # ---
 FROM base AS runner
-ENV NODE_ENV=production
-ENV PORT=3001
+ENV NODE_ENV=production \
+    PORT=3001 \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-ca-bundle.pem
+
+ADD https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/rds-ca-bundle.pem
+RUN chmod 644 /etc/ssl/certs/rds-ca-bundle.pem
 
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 metamorph
@@ -61,10 +66,13 @@ COPY --from=builder --chown=metamorph:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=metamorph:nodejs /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
 COPY --from=builder --chown=metamorph:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=metamorph:nodejs /app/packages/shared-ts/package.json ./packages/shared-ts/package.json
+COPY --from=builder --chown=metamorph:nodejs /app/packages/shared-ts/node_modules ./packages/shared-ts/node_modules
 COPY --from=builder --chown=metamorph:nodejs /app/packages/shared-ts/dist ./packages/shared-ts/dist
 COPY --from=builder --chown=metamorph:nodejs /app/packages/orchestrator/package.json ./packages/orchestrator/package.json
+COPY --from=builder --chown=metamorph:nodejs /app/packages/orchestrator/node_modules ./packages/orchestrator/node_modules
 COPY --from=builder --chown=metamorph:nodejs /app/packages/orchestrator/dist ./packages/orchestrator/dist
 COPY --from=builder --chown=metamorph:nodejs /app/apps/api/package.json ./apps/api/package.json
+COPY --from=builder --chown=metamorph:nodejs /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=builder --chown=metamorph:nodejs /app/apps/api/dist ./apps/api/dist
 COPY --from=builder --chown=metamorph:nodejs /app/apps/api/drizzle ./apps/api/drizzle
 
