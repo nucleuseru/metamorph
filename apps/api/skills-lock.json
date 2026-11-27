@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "skills": {
+    "better-auth-best-practices": {
+      "source": "better-auth/skills",
+      "commit": "20c9e88a5c007461a703f1c213572b073196113e",
+      "sourceType": "github",
+      "skillPath": "better-auth/best-practices/SKILL.md",
+      "computedHash": "2773c3687f2cf96d659049ebf2d8c86058a33541b09360712df0dc6b1404c403"
+    },
+    "better-auth-security-best-practices": {
+      "source": "better-auth/skills",
+      "commit": "20c9e88a5c007461a703f1c213572b073196113e",
+      "sourceType": "github",
+      "skillPath": "security/SKILL.md",
+      "computedHash": "36e9710eaa13c61c00bec00a4902fdc6ed829e6de13127238ae57494e93c1d9d"
+    },
+    "email-and-password-best-practices": {
+      "source": "better-auth/skills",
+      "commit": "20c9e88a5c007461a703f1c213572b073196113e",
+      "sourceType": "github",
+      "skillPath": "better-auth/emailAndPassword/SKILL.md",
+      "computedHash": "407c1244202876daa748818ed41dc55afde1b3f7aec48ae3a1f1c8a7ee40465e"
+    },
+    "runpodctl": {
+      "source": "runpod/runpod-plugins-official",
+      "commit": "6c9bf684625ae857cc0d8fe43ae881e352508fb5",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/runpodctl/SKILL.md",
+      "computedHash": "f13caae090b0347ca921ad4bf510eed494bd202a7a72f0538899d3f6f62ff055"
+    },
+    "vastai": {
+      "source": "vast-ai/vast-cli",
+      "commit": "fa85015e91ff2e36acd9e07703ef8e083a5f451d",
+      "sourceType": "github",
+      "skillPath": "vastai/SKILL.md",
+      "computedHash": "00da0dc74a9c43ebf0a895669a49fc437acfd1b5b3d96d7d17277c9e8f7b4ef5"
+    }
+  }
+}

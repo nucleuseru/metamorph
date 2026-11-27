@@ -1,0 +1,24 @@
+{
+  "name": "@metamorph/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@metamorph/shared": "workspace:*",
+    "effect": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6"
+  }
+}

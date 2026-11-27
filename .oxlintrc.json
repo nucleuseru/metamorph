@@ -1,5 +1,5 @@
 {
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
   "plugins": ["typescript", "unicorn", "oxc"],
   "categories": {
     "correctness": "error",
@@ -8,12 +8,34 @@
   "ignorePatterns": [
     ".venv/**",
     "dist/**",
+    "**/dist/**",
     "build/**",
     ".turbo/**",
+    ".next/**",
+    "apps/web/.next/**",
     "node_modules/**",
-    "vendor/**"
+    "vendor/**",
+    ".agents/**",
+    "**/.agents/**"
   ],
-  "rules": {},
+  "overrides": [
+    {
+      "files": ["apps/web/**/*.{ts,tsx}"],
+      "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y", "nextjs"],
+      "rules": {
+        "react/react-in-jsx-scope": "off"
+      }
+    }
+  ],
+  "settings": {
+    "next": {
+      "rootDir": ["apps/web"]
+    }
+  },
+  "rules": {
+    "no-underscore-dangle": ["warn", { "allow": ["_tag"] }],
+    "unicorn/no-array-sort": "off"
+  },
   "env": {
     "builtin": true
   }

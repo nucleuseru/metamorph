@@ -1,0 +1,32 @@
+# Git & tooling
+.git
+.github
+.gitignore
+.gitmodules
+.turbo
+.venv
+.ruff_cache
+.pytest_cache
+.DS_Store
+
+# Build outputs, deps & env files
+node_modules
+**/node_modules
+dist
+**/dist
+build
+**/build
+.next
+**/.next
+**/.env
+**/.env.*
+
+# Workspaces and assets not needed for @metamorph/api
+apps/web
+apps/engine-py
+packages/shared-py
+vendor
+docs
+**/.agents
+**/skills-lock.json
+apps/api/data
