@@ -143,21 +143,24 @@ Populate a volume once using [`download_models.sh`](../apps/engine-py/scripts/do
 
 ## Key Configuration (`ENGINE_*`)
 
-| Variable                                                        | Default                   | Description                                        |
-| :-------------------------------------------------------------- | :------------------------ | :------------------------------------------------- |
-| `ENGINE_HOST` / `ENGINE_PORT`                                   | `0.0.0.0` / `8000`        | Bind address and port                              |
-| `ENGINE_INSTANCE_ID` / `ENGINE_USER_ID`                         | `local-instance` / `None` | Dedicated instance and user binding                |
-| `ENGINE_ENABLE_VOICE` / `ENGINE_ENABLE_VIDEO`                   | `true` / `true`           | Modalities loaded at boot                          |
-| `ENGINE_BACKEND`                                                | `gpu`                     | `gpu` (Seed-VC + JoyAI) or `mock` (CPU testing)    |
-| `ENGINE_JWT_PUBLIC_KEY` / `ENGINE_JWT_JWKS_URL`                 | `None` / `None`           | Static SPKI Ed25519 PEM and/or `apps/api` JWKS URL |
-| `ENGINE_JWT_JWKS_CACHE_TTL_S`                                   | `300`                     | JWKS key cache TTL in seconds                      |
-| `ENGINE_JWT_ISSUER` / `ENGINE_JWT_AUDIENCE`                     | `None` / `None`           | Expected JWT `iss` and `aud` claims                |
-| `ENGINE_STARTUP_IDLE_TIMEOUT_S` / `ENGINE_DISCONNECT_TIMEOUT_S` | `120.0` / `30.0`          | Idle and disconnect shutdown timeouts              |
-| `ENGINE_LIFECYCLE_WEBHOOK_URL` / `_SECRET`                      | `None`                    | Signed lifecycle webhook destination               |
-| `ENGINE_INITIAL_PROMPT` / `_REF_IMAGE_URL` / `_REF_AUDIO_URL`   | `None`                    | Startup reference asset bootstrap                  |
-| `ENGINE_VIDEO_WIDTH` / `_HEIGHT` / `_FPS`                       | `840` / `480` / `24`      | Video streaming resolution and FPS                 |
-| `ENGINE_VOICE_SAMPLE_RATE` / `_VAD_BACKEND`                     | `22050` / `rms`           | Seed-VC sample rate and VAD mode (`rms` or `none`) |
-| `ENGINE_AV_SYNC_ENABLED` / `_MAX_HOLD_S`                        | `true` / `1.0`            | Adaptive dual-modality A/V sync controls           |
+| Variable                                                        | Default                   | Description                                                                               |
+| :-------------------------------------------------------------- | :------------------------ | :---------------------------------------------------------------------------------------- |
+| `ENGINE_HOST` / `ENGINE_PORT`                                   | `0.0.0.0` / `8000`        | Bind address and port                                                                     |
+| `ENGINE_INSTANCE_ID` / `ENGINE_USER_ID`                         | `local-instance` / `None` | Dedicated instance and user binding                                                       |
+| `ENGINE_ENABLE_VOICE` / `ENGINE_ENABLE_VIDEO`                   | `true` / `true`           | Modalities loaded at boot                                                                 |
+| `ENGINE_BACKEND`                                                | `gpu`                     | `gpu` (Seed-VC + JoyAI) or `mock` (CPU testing)                                           |
+| `ENGINE_JWT_PUBLIC_KEY` / `ENGINE_JWT_JWKS_URL`                 | `None` / `None`           | Static SPKI Ed25519 PEM and/or `apps/api` JWKS URL                                        |
+| `ENGINE_JWT_JWKS_CACHE_TTL_S`                                   | `300`                     | JWKS key cache TTL in seconds                                                             |
+| `ENGINE_JWT_ISSUER` / `ENGINE_JWT_AUDIENCE`                     | `None` / `None`           | Expected JWT `iss` and `aud` claims                                                       |
+| `ENGINE_STARTUP_IDLE_TIMEOUT_S` / `ENGINE_DISCONNECT_TIMEOUT_S` | `120.0` / `30.0`          | Idle and disconnect shutdown timeouts                                                     |
+| `ENGINE_LIFECYCLE_WEBHOOK_URL` / `_SECRET`                      | `None`                    | Signed lifecycle webhook destination                                                      |
+| `ENGINE_INITIAL_PROMPT` / `_REF_IMAGE_URL` / `_REF_AUDIO_URL`   | `None`                    | Startup reference asset bootstrap                                                         |
+| `ENGINE_VIDEO_WIDTH` / `_HEIGHT` / `_FPS`                       | `840` / `480` / `24`      | Video streaming resolution and FPS                                                        |
+| `ENGINE_VOICE_SAMPLE_RATE` / `_VAD_BACKEND`                     | `22050` / `rms`           | Seed-VC sample rate and VAD mode (`rms` or `none`)                                        |
+| `ENGINE_VOICE_DIFFUSION_STEPS` / `_CFG_RATE`                    | `30` / `0.7`              | Seed-VC Euler ODE steps and classifier-free guidance rate                                 |
+| `ENGINE_VOICE_BLOCK_TIME_S` / `_CROSSFADE_S`                    | `0.40` / `0.08`           | Streaming chunk length and SOLA crossfade window                                          |
+| `ENGINE_VOICE_MAX_PROMPT_LENGTH_S` / `_DTYPE`                   | `15.0` / `auto`           | Max reference audio prompt duration and precision (`auto`/`float16`/`bfloat16`/`float32`) |
+| `ENGINE_AV_SYNC_ENABLED` / `_MAX_HOLD_S`                        | `true` / `1.0`            | Adaptive dual-modality A/V sync controls                                                  |
 
 ## Commands
 

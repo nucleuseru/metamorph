@@ -41,4 +41,5 @@ async def ready(request: Request, response: Response) -> ReadyResponse:
         lifecycle_state=str(lifecycle.state),
         instance_id=settings.instance_id,
         enabled_modalities=list(settings.enabled_modalities),
+        reason=lifecycle.shutdown_reason if ready_state == "shutting_down" else None,
     )

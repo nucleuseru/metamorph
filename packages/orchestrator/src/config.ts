@@ -46,7 +46,7 @@ export const defaultOrchestratorConfig: OrchestratorConfigShape = {
   imageTagFull: "full",
   imageTagVoice: "voice",
   imageTagMock: "mock",
-  startupTimeoutS: 300,
+  startupTimeoutS: 600,
   readinessPollIntervalMs: 2500,
   idleTimeoutS: 120,
   disconnectTimeoutS: 30,

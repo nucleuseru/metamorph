@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -25,10 +27,10 @@ class AudioSessionConfig:
     output_codec: AudioCodec = AudioCodec.PCM_S16LE
     input_sample_rate: int = 22050
     output_sample_rate: int = 22050
-    diffusion_steps: int = 10
+    diffusion_steps: int = 30
     cfg_rate: float = 0.7
-    block_time_s: float = 0.25
-    vad_threshold_db: float = -45.0
+    block_time_s: float = 0.40
+    vad_threshold_db: float = -48.0
     passthrough: bool = False
 
 
@@ -155,6 +157,72 @@ def resample_audio_linear(samples: np.ndarray, orig_sr: int, target_sr: int) -> 
     x_old = np.linspace(0.0, 1.0, num=samples.shape[0], endpoint=False)
     x_new = np.linspace(0.0, 1.0, num=out_len, endpoint=False)
     return np.interp(x_new, x_old, samples).astype(np.float32)
+
+
+def resample_audio_hq(samples: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+    """Anti-aliased polyphase resampler (scipy when available, linear fallback otherwise)."""
+    arr = np.asarray(samples, dtype=np.float32)
+    if orig_sr == target_sr or arr.size == 0:
+        return arr
+    try:
+        scipy_signal = importlib.import_module("scipy.signal")
+    except ImportError:
+        return resample_audio_linear(arr, orig_sr, target_sr)
+    divisor = math.gcd(orig_sr, target_sr)
+    up = target_sr // divisor
+    down = orig_sr // divisor
+    resampled = scipy_signal.resample_poly(arr, up, down)
+    return np.clip(np.asarray(resampled, dtype=np.float32), -1.0, 1.0)
+
+
+def prepare_reference_audio(
+    samples: np.ndarray,
+    sample_rate: int,
+    *,
+    max_duration_s: float,
+    trim_top_db: float = 40.0,
+    pad_s: float = 0.05,
+    min_trimmed_s: float = 0.5,
+    target_peak: float = 0.891,
+) -> np.ndarray:
+    """Clean a reference speaker clip: trim dead edge silence, remove DC, cap length, normalize."""
+    arr = np.asarray(samples, dtype=np.float32).reshape(-1)
+    if arr.size == 0 or sample_rate <= 0:
+        return arr
+
+    # Trim leading/trailing silence using AC frame RMS (immune to DC offset)
+    peak = float(np.max(np.abs(arr)))
+    if peak >= 0.003:
+        frame_len = max(1, round(sample_rate * 0.02))
+        n_frames = arr.size // frame_len
+        if n_frames >= 2:
+            frames = arr[: n_frames * frame_len].reshape(n_frames, frame_len)
+            centered = frames - np.mean(frames, axis=1, keepdims=True)
+            frame_rms = np.sqrt(np.mean(np.square(centered, dtype=np.float32), axis=1))
+            max_rms = float(np.max(frame_rms))
+            if max_rms > 1e-6:
+                rms_thresh = max_rms * (10.0 ** (-trim_top_db / 20.0))
+                active = np.flatnonzero(frame_rms >= rms_thresh)
+                if active.size > 0:
+                    pad_samples = round(sample_rate * pad_s)
+                    start = max(0, int(active[0]) * frame_len - pad_samples)
+                    end = min(arr.size, (int(active[-1]) + 1) * frame_len + pad_samples)
+                    if (end - start) >= round(sample_rate * min_trimmed_s):
+                        arr = arr[start:end]
+
+    # Remove DC bias on dynamic signals so reference mel spectrograms have no offset
+    if float(np.std(arr)) > 1e-6:
+        arr = arr - float(np.mean(arr))
+
+    max_samples = max(1, int(sample_rate * max_duration_s))
+    if arr.size > max_samples:
+        arr = arr[:max_samples]
+
+    # Normalize audible clips to -1 dBFS so quiet reference recordings stay crisp & full-bodied
+    post_peak = float(np.max(np.abs(arr))) if arr.size > 0 else 0.0
+    if post_peak >= 0.003:
+        arr = arr * (target_peak / post_peak)
+    return np.clip(arr, -1.0, 1.0).astype(np.float32, copy=False)
 
 
 class RmsHangoverVad:

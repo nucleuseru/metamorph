@@ -49,6 +49,9 @@ def test_entrypoint_resolves_volume_paths_and_respects_overrides(tmp_path: Path)
     )
     assert parsed["ENGINE_VIDEO_DIT_CKPT"] == str(expected_dit)
     assert parsed["JOYOMNI_CACHE_ROOT"] == str(tmp_path / "cache" / "cpu")
+    assert parsed["JOYOMNI_FP8_IMG"] == "1"
+    assert parsed["JOYOMNI_FP8_TXT"] == "1"
+    assert parsed["JOYOMNI_CUDA_GRAPH"] == "1"
 
     # Explicit override must win
     custom_dit = str(tmp_path / "custom.pth")

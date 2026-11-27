@@ -199,6 +199,100 @@ describe("EngineOrchestrator lifecycle, webhooks, conflicts, and reconciliation"
     );
   });
 
+  test("marks session failed when engine reports startup_failed shutting_down webhook", async () => {
+    const terminated: Array<string> = [];
+    const provider: GpuProvider = {
+      name: "runpod",
+      provision: (req) =>
+        Effect.succeed({
+          provider: "runpod",
+          providerInstanceId: `pod-${req.instanceId}`,
+          gpuType: "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+          hourlyRateUsd: 2.79,
+          httpUrl: "https://pod-8000.proxy.runpod.net",
+          wsUrl: "wss://pod-8000.proxy.runpod.net/ws/session",
+          tlsSupported: true,
+        }),
+      getStatus: () =>
+        Effect.succeed({
+          status: "running",
+          httpUrl: "https://pod-8000.proxy.runpod.net",
+          wsUrl: "wss://pod-8000.proxy.runpod.net/ws/session",
+          tlsSupported: true,
+        }),
+      terminate: (id) =>
+        Effect.sync(() => {
+          terminated.push(id);
+        }),
+      listManaged: Effect.succeed([]),
+    };
+
+    const httpLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(
+              JSON.stringify({
+                status: "warming",
+                lifecycle_state: "booting",
+                instance_id: "inst-fail",
+                enabled_modalities: ["voice", "video"],
+              }),
+              { status: 503, headers: { "content-type": "application/json" } },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    const testLayer = EngineOrchestrator.layer.pipe(
+      Layer.provideMerge(
+        OrchestratorConfig.layerFrom({
+          ...defaultOrchestratorConfig,
+          readinessPollIntervalMs: 500,
+          webhookBaseUrl: "https://api.example.com",
+        }),
+      ),
+      Layer.provideMerge(InstanceStore.layerMemory),
+      Layer.provideMerge(ProviderRegistry.layerFrom([provider])),
+      Layer.provideMerge(EngineClient.layer.pipe(Layer.provide(httpLayer))),
+      Layer.provideMerge(OrchestratorEventBus.layer),
+      Layer.provideMerge(Mac.layerWebCrypto.pipe(Layer.provide(SecureRandom.layerWebCrypto))),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const orchestrator = yield* EngineOrchestrator;
+        const session = yield* orchestrator.provisionSession({
+          userId: "user-fail",
+          modalities: ["voice", "video"],
+          quality: "standard",
+          jwtPublicKeyPem: "-----BEGIN PUBLIC KEY-----\nTEST\n-----END PUBLIC KEY-----",
+          instanceId: "inst-fail",
+        });
+
+        const bodyBytes = new TextEncoder().encode(
+          JSON.stringify({
+            event: "shutting_down",
+            instance_id: "inst-fail",
+            timestamp: 126,
+            reason: "startup_failed: Missing required JoyAI video checkpoints",
+          }),
+        );
+        const sig = yield* signWebhookPayload(bodyBytes, session.webhookSecret);
+        const failed = yield* orchestrator.handleWebhook("inst-fail", bodyBytes, sig);
+        assert.equal(failed.status, "failed");
+        assert.equal(
+          failed.failureReason,
+          "startup_failed: Missing required JoyAI video checkpoints",
+        );
+        assert.deepEqual(terminated, ["pod-inst-fail"]);
+      }).pipe(Effect.provide(testLayer)),
+    );
+  });
+
   test("reconcileOnce terminates orphaned provider instances not tracked as active", async () => {
     const terminated: Array<string> = [];
     const orphan: ManagedProviderInstance = {

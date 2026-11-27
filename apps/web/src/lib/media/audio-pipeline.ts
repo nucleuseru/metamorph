@@ -115,7 +115,7 @@ class MetamorphPlaybackProcessor extends AudioWorkletProcessor {
     this.underrunDecayRemaining = 0;
     this.lastOutputSample = 0;
 
-    this.configureBuffer(opts.blockTimeS || 0.25);
+    this.configureBuffer(opts.blockTimeS || 0.4);
 
     this.port.onmessage = (ev) => {
       const data = ev.data;
@@ -178,10 +178,10 @@ class MetamorphPlaybackProcessor extends AudioWorkletProcessor {
     const safeBlockS =
       typeof blockTimeS === "number" && Number.isFinite(blockTimeS) && blockTimeS > 0.02
         ? blockTimeS
-        : 0.25;
-    // Hold ~1 block of jitter cushion before un-priming (capped at 450ms for large blocks)
+        : 0.4;
+    // Hold ~1 block of jitter cushion before un-priming (capped at 500ms for large blocks)
     // and never trigger drift trimming until >4.5 blocks have accumulated.
-    this.primeSamples = Math.round(sampleRate * Math.min(0.45, Math.max(0.16, safeBlockS * 1.15)));
+    this.primeSamples = Math.round(sampleRate * Math.min(0.5, Math.max(0.16, safeBlockS * 1.15)));
     this.trimTargetSamples = Math.round(sampleRate * Math.max(0.32, safeBlockS * 1.5));
     this.maxBufferSamples = Math.round(sampleRate * Math.max(1.0, safeBlockS * 4.5));
 
@@ -294,7 +294,7 @@ export class AudioPipeline {
   private monitorMuted = true;
   private inputSampleRate = 22050;
   private outputSampleRate = 22050;
-  private blockTimeS = 0.25;
+  private blockTimeS = 0.4;
   private chunkSamples = 882;
   private outputResampler: StreamingResampler | null = null;
   private callbacks: AudioPipelineCallbacks;
@@ -319,7 +319,7 @@ export class AudioPipeline {
       Number.isFinite(options.blockTimeS) &&
       options.blockTimeS > 0.02
         ? options.blockTimeS
-        : 0.25;
+        : 0.4;
     this.chunkSamples = Math.round(this.inputSampleRate * CHUNK_DURATION_S);
     this.micMuted = options.micMuted ?? false;
     this.muteFlushRemaining = 0;

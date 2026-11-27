@@ -195,6 +195,7 @@ class ReadyResponse(BaseModel):
     lifecycle_state: str
     instance_id: str
     enabled_modalities: list[Modality]
+    reason: str | None = None
 
 
 class BootstrapStatus(BaseModel):
