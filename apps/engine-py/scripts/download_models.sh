@@ -64,10 +64,10 @@ fi
 hf_download_file() {
     local repo="$1"
     local filename="$2"
-    local cache_dir="$3"
+    local local_dir="$3"
     run_or_echo "$PYTHON_BIN" -c "
 from huggingface_hub import hf_hub_download
-hf_hub_download(repo_id='$repo', filename='$filename', cache_dir='$cache_dir')
+hf_hub_download(repo_id='$repo', filename='$filename', local_dir='$local_dir')
 "
 }
 
@@ -103,12 +103,8 @@ if [ "$WANT_VOICE" = "1" ]; then
     hf_download_file "Plachta/Seed-VC" "DiT_uvit_tat_xlsr_ema.pth" "$SEEDVC_CACHE"
     hf_download_file "FunAudioLLM/CosyVoice-300M" "hift.pt" "$SEEDVC_CACHE"
     hf_download_file "funasr/campplus" "campplus_cn_common.bin" "$SEEDVC_CACHE"
-    # Pre-cache XLSR feature extractor and encoder weights in HF_HOME
-    run_or_echo "$PYTHON_BIN" -c "
-from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2Model
-Wav2Vec2FeatureExtractor.from_pretrained('facebook/wav2vec2-xls-r-300m')
-Wav2Vec2Model.from_pretrained('facebook/wav2vec2-xls-r-300m')
-"
+    # Pre-cache XLSR feature extractor and encoder weights as flat files (FUSE/global-volume safe)
+    hf_download_repo "facebook/wav2vec2-xls-r-300m" "$SEEDVC_CACHE/facebook__wav2vec2-xls-r-300m" "" '["config.json", "preprocessor_config.json", "pytorch_model.bin", "model.safetensors"]'
 fi
 
 if [ "$WANT_VIDEO" = "1" ]; then

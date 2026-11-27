@@ -5,7 +5,10 @@ from __future__ import annotations
 import contextlib
 import importlib
 import importlib.util
+import logging
+import shutil
 import sys
+import tempfile
 import threading
 import types
 from pathlib import Path
@@ -25,6 +28,174 @@ from metamorph_engine.pipelines.base import (
     resample_audio_linear,
 )
 from metamorph_engine.protocol import AudioCodec, FrameFlags
+
+logger = logging.getLogger("metamorph_engine.pipelines.voice_seedvc")
+
+
+def _file_size_or_none(path: str | Path) -> int | None:
+    try:
+        return Path(path).stat().st_size
+    except OSError:
+        return None
+
+
+def _download_hf_file(
+    hf_hub: Any,
+    *,
+    repo_id: str,
+    filename: str,
+    target_dir: str,
+    force_download: bool = False,
+) -> str:
+    """Download a single HuggingFace file as a real file (avoiding FUSE-unfriendly symlinks)."""
+    dest = Path(target_dir) / filename
+    if not force_download and dest.is_file() and (_file_size_or_none(dest) or 0) > 0:
+        return str(dest)
+
+    Path(target_dir).mkdir(parents=True, exist_ok=True)
+    try:
+        return str(
+            hf_hub.hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                local_dir=target_dir,
+                force_download=force_download,
+            )
+        )
+    except TypeError:
+        return str(
+            hf_hub.hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                cache_dir=target_dir,
+            )
+        )
+
+
+def _load_torch_hf_checkpoint(
+    torch_mod: Any,
+    hf_hub: Any,
+    *,
+    repo_id: str,
+    filename: str,
+    cache_dir: str,
+    label: str,
+) -> Any:
+    """Download and `torch.load` a HF checkpoint, recovering from truncated/FUSE-corrupted files."""
+    ckpt_path = _download_hf_file(
+        hf_hub,
+        repo_id=repo_id,
+        filename=filename,
+        target_dir=cache_dir,
+    )
+    try:
+        return _torch_load_compat(torch_mod, ckpt_path)
+    except (EOFError, RuntimeError, OSError) as first_exc:
+        first_size = _file_size_or_none(ckpt_path)
+        logger.warning(
+            "Failed loading %s from %s (size=%s): %s: %s; retrying via local temp storage",
+            label,
+            ckpt_path,
+            first_size,
+            type(first_exc).__name__,
+            first_exc,
+        )
+        local_tmp_dir = Path(tempfile.gettempdir()) / "metamorph-voice-cache"
+        local_tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            fresh_path = _download_hf_file(
+                hf_hub,
+                repo_id=repo_id,
+                filename=filename,
+                target_dir=str(local_tmp_dir),
+                force_download=True,
+            )
+            loaded = _torch_load_compat(torch_mod, fresh_path)
+        except Exception as retry_exc:
+            retry_size = _file_size_or_none(local_tmp_dir / filename)
+            raise RuntimeError(
+                f"Failed loading {label} ({repo_id}/{filename}; volume_size={first_size}, "
+                f"retry_size={retry_size}): {type(retry_exc).__name__}: {retry_exc}"
+            ) from retry_exc
+
+        # Best-effort repair of the persistent volume copy so subsequent boots stay warm
+        with contextlib.suppress(OSError):
+            target_file = Path(cache_dir) / filename
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp_copy = target_file.with_suffix(target_file.suffix + ".tmp")
+            shutil.copyfile(fresh_path, tmp_copy)
+            tmp_copy.replace(target_file)
+        return loaded
+
+
+def _load_xlsr_model(
+    transformers_mod: Any,
+    hf_hub: Any,
+    *,
+    model_name: str,
+    cache_dir: str,
+) -> tuple[Any, Any]:
+    """Load XLSR feature extractor and encoder using symlink-free storage with SSD fallback."""
+    xlsr_dir = Path(cache_dir) / model_name.replace("/", "__")
+    snapshot_fn = getattr(hf_hub, "snapshot_download", None)
+    source = model_name
+    if callable(snapshot_fn):
+        with contextlib.suppress(Exception):
+            xlsr_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_fn(
+                repo_id=model_name,
+                local_dir=str(xlsr_dir),
+                allow_patterns=[
+                    "config.json",
+                    "preprocessor_config.json",
+                    "pytorch_model.bin",
+                    "model.safetensors",
+                ],
+            )
+            if (xlsr_dir / "config.json").is_file():
+                source = str(xlsr_dir)
+
+    try:
+        feat_ext = transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained(source)
+        w2v = transformers_mod.Wav2Vec2Model.from_pretrained(source)
+        return feat_ext, w2v
+    except (EOFError, RuntimeError, OSError) as first_exc:
+        logger.warning(
+            "Failed loading XLSR %s from %s: %s: %s; retrying via local temp storage",
+            model_name,
+            source,
+            type(first_exc).__name__,
+            first_exc,
+        )
+        local_tmp = Path(tempfile.gettempdir()) / "metamorph-voice-cache" / "xlsr"
+        local_tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            if callable(snapshot_fn):
+                snapshot_fn(
+                    repo_id=model_name,
+                    local_dir=str(local_tmp),
+                    force_download=True,
+                    allow_patterns=[
+                        "config.json",
+                        "preprocessor_config.json",
+                        "pytorch_model.bin",
+                        "model.safetensors",
+                    ],
+                )
+                feat_ext = transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained(str(local_tmp))
+                w2v = transformers_mod.Wav2Vec2Model.from_pretrained(str(local_tmp))
+                return feat_ext, w2v
+            feat_ext = transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained(
+                model_name, cache_dir=str(local_tmp), force_download=True
+            )
+            w2v = transformers_mod.Wav2Vec2Model.from_pretrained(
+                model_name, cache_dir=str(local_tmp), force_download=True
+            )
+            return feat_ext, w2v
+        except Exception as retry_exc:
+            raise RuntimeError(
+                f"Failed loading XLSR ({model_name}): {type(retry_exc).__name__}: {retry_exc}"
+            ) from retry_exc
 
 
 def _ensure_dac_importable() -> None:
@@ -61,9 +232,8 @@ def _torch_load_compat(torch_mod: Any, path: str) -> Any:
         return torch_mod.load(path, map_location="cpu")
 
 
-def _load_seedvc_checkpoint(torch_mod: Any, model: Any, ckpt_path: str) -> None:
-    """Load `net` state dicts from Seed-VC DiT/length-regulator checkpoints safely."""
-    state = _torch_load_compat(torch_mod, ckpt_path)
+def _load_seedvc_state_dict(model: Any, state: Any) -> None:
+    """Apply loaded Seed-VC `net` state dicts onto the DiT/length-regulator modules."""
     params = state["net"]
     for key in model:
         if key not in params:
@@ -81,6 +251,12 @@ def _load_seedvc_checkpoint(torch_mod: Any, model: Any, ckpt_path: str) -> None:
         }
         model[key].load_state_dict(filtered, strict=False)
         model[key].eval()
+
+
+def _load_seedvc_checkpoint(torch_mod: Any, model: Any, ckpt_path: str) -> None:
+    """Load `net` state dicts from Seed-VC DiT/length-regulator checkpoints safely."""
+    state = _torch_load_compat(torch_mod, ckpt_path)
+    _load_seedvc_state_dict(model, state)
 
 
 class _LoadedSeedVC:
@@ -428,25 +604,23 @@ class SeedVCVoicePipeline(VoicePipeline):
         cache_dir = self.settings.voice_cache_dir or str(seed_vc_dir / "checkpoints")
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
 
-        if self.settings.voice_checkpoint_path and self.settings.voice_config_path:
-            ckpt_path = self.settings.voice_checkpoint_path
-            cfg_path = self.settings.voice_config_path
+        use_custom_ckpt = bool(
+            self.settings.voice_checkpoint_path and self.settings.voice_config_path
+        )
+        if use_custom_ckpt:
+            cfg_path = str(self.settings.voice_config_path)
         else:
-            ckpt_path = hf_hub.hf_hub_download(
-                repo_id="Plachta/Seed-VC",
-                filename="DiT_uvit_tat_xlsr_ema.pth",
-                cache_dir=cache_dir,
-            )
             preset_cfg = (
                 seed_vc_dir / "configs" / "presets" / "config_dit_mel_seed_uvit_xlsr_tiny.yml"
             )
             cfg_path = (
                 str(preset_cfg)
                 if preset_cfg.is_file()
-                else hf_hub.hf_hub_download(
+                else _download_hf_file(
+                    hf_hub,
                     repo_id="Plachta/Seed-VC",
                     filename="config_dit_mel_seed_uvit_xlsr_tiny.yml",
-                    cache_dir=cache_dir,
+                    target_dir=cache_dir,
                 )
             )
 
@@ -458,7 +632,18 @@ class SeedVCVoicePipeline(VoicePipeline):
         sr = int(config["preprocess_params"]["sr"])
         hop_length = int(config["preprocess_params"]["spect_params"]["hop_length"])
 
-        _load_seedvc_checkpoint(torch, model, ckpt_path)
+        if use_custom_ckpt:
+            _load_seedvc_checkpoint(torch, model, str(self.settings.voice_checkpoint_path))
+        else:
+            dit_state = _load_torch_hf_checkpoint(
+                torch,
+                hf_hub,
+                repo_id="Plachta/Seed-VC",
+                filename="DiT_uvit_tat_xlsr_ema.pth",
+                cache_dir=cache_dir,
+                label="Seed-VC DiT checkpoint",
+            )
+            _load_seedvc_state_dict(model, dit_state)
         for key in model:
             model[key].eval()
             model[key].to(device)
@@ -466,17 +651,28 @@ class SeedVCVoicePipeline(VoicePipeline):
 
         # CAMPPlus speaker encoder (bundled in vendor/seed-vc/)
         local_campplus = seed_vc_dir / "campplus_cn_common.bin"
-        campplus_ckpt = (
-            str(local_campplus)
-            if local_campplus.is_file()
-            else hf_hub.hf_hub_download(
+        campplus_model = campplus_mod.CAMPPlus(feat_dim=80, embedding_size=192)
+        campplus_state: Any | None = None
+        if local_campplus.is_file() and (_file_size_or_none(local_campplus) or 0) > 0:
+            try:
+                campplus_state = _torch_load_compat(torch, str(local_campplus))
+            except (EOFError, RuntimeError, OSError) as exc:
+                logger.warning(
+                    "Bundled CAMPPlus checkpoint at %s failed to load (%s: %s); falling back to HF",
+                    local_campplus,
+                    type(exc).__name__,
+                    exc,
+                )
+        if campplus_state is None:
+            campplus_state = _load_torch_hf_checkpoint(
+                torch,
+                hf_hub,
                 repo_id="funasr/campplus",
                 filename="campplus_cn_common.bin",
                 cache_dir=cache_dir,
+                label="CAMPPlus speaker encoder",
             )
-        )
-        campplus_model = campplus_mod.CAMPPlus(feat_dim=80, embedding_size=192)
-        campplus_model.load_state_dict(_torch_load_compat(torch, campplus_ckpt))
+        campplus_model.load_state_dict(campplus_state)
         campplus_model.eval()
         campplus_model.to(device)
 
@@ -493,12 +689,15 @@ class SeedVCVoicePipeline(VoicePipeline):
             **hift_config["hift"],
             f0_predictor=hifigan_f0_mod.ConvRNNF0Predictor(**hift_config["f0_predictor"]),
         )
-        hift_path = hf_hub.hf_hub_download(
+        hift_state = _load_torch_hf_checkpoint(
+            torch,
+            hf_hub,
             repo_id="FunAudioLLM/CosyVoice-300M",
             filename="hift.pt",
             cache_dir=cache_dir,
+            label="HiFT vocoder checkpoint",
         )
-        hift_gen.load_state_dict(_torch_load_compat(torch, hift_path))
+        hift_gen.load_state_dict(hift_state)
         hift_gen.eval()
         hift_gen.to(device)
         vocoder_fn = hift_gen
@@ -509,8 +708,12 @@ class SeedVCVoicePipeline(VoicePipeline):
             raise ValueError(f"Unsupported Seed-VC speech tokenizer: {tokenizer_type}")
         model_name = config["model_params"]["speech_tokenizer"]["name"]
         output_layer = config["model_params"]["speech_tokenizer"]["output_layer"]
-        feat_ext = transformers.Wav2Vec2FeatureExtractor.from_pretrained(model_name)
-        w2v = transformers.Wav2Vec2Model.from_pretrained(model_name)
+        feat_ext, w2v = _load_xlsr_model(
+            transformers,
+            hf_hub,
+            model_name=model_name,
+            cache_dir=cache_dir,
+        )
         w2v.encoder.layers = w2v.encoder.layers[:output_layer]
         w2v = w2v.to(device).eval().half()
 

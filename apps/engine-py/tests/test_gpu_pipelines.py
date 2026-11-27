@@ -777,10 +777,19 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
             },
         }
 
-    def _hf_download(*, repo_id: str, filename: str, cache_dir: str) -> str:
-        out = Path(cache_dir) / filename
+    def _hf_download(
+        *,
+        repo_id: str,
+        filename: str,
+        local_dir: str | None = None,
+        cache_dir: str | None = None,
+        force_download: bool = False,
+    ) -> str:
+        base = local_dir or cache_dir or str(tmp_path)
+        out = Path(base) / filename
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(b"ckpt")
+        if force_download or not out.is_file():
+            out.write_bytes(b"ckpt")
         return str(out)
 
     class _FakeW2V:
@@ -909,3 +918,53 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
 
     sess.close()
     pipe.close()
+
+
+def test_seedvc_checkpoint_loader_recovers_from_corrupted_volume_file(tmp_path: Path) -> None:
+    """When a cached checkpoint on a shared/global volume raises EOFError, retry via local temp."""
+    from metamorph_engine.pipelines.voice_seedvc import _load_torch_hf_checkpoint
+
+    volume_dir = tmp_path / "global_volume"
+    volume_dir.mkdir(parents=True, exist_ok=True)
+    corrupted = volume_dir / "DiT_uvit_tat_xlsr_ema.pth"
+    corrupted.write_bytes(b"truncated")
+
+    calls: list[tuple[str, bool]] = []
+
+    class _FakeHfHub:
+        @staticmethod
+        def hf_hub_download(
+            *,
+            repo_id: str,
+            filename: str,
+            local_dir: str,
+            force_download: bool = False,
+        ) -> str:
+            calls.append((local_dir, force_download))
+            out = Path(local_dir) / filename
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"valid-checkpoint-bytes")
+            return str(out)
+
+    class _FakeTorch:
+        @staticmethod
+        def load(
+            path: str, map_location: str = "cpu", weights_only: bool = False
+        ) -> dict[str, Any]:
+            if Path(path).read_bytes() != b"valid-checkpoint-bytes":
+                raise EOFError("Ran out of input")
+            return {"net": {"ok": True}}
+
+    loaded = _load_torch_hf_checkpoint(
+        _FakeTorch,
+        _FakeHfHub,
+        repo_id="Plachta/Seed-VC",
+        filename="DiT_uvit_tat_xlsr_ema.pth",
+        cache_dir=str(volume_dir),
+        label="Seed-VC DiT checkpoint",
+    )
+
+    assert loaded == {"net": {"ok": True}}
+    assert len(calls) == 1
+    assert calls[0][1] is True
+    assert corrupted.read_bytes() == b"valid-checkpoint-bytes"
