@@ -36,7 +36,8 @@ RUN turbo prune @metamorph/api --docker
 FROM base AS builder
 ENV NODE_ENV=development
 COPY --from=prepare /app/out/json/ .
-RUN pnpm install --frozen-lockfile
+# Root `prepare` (`effect-tsgo patch --oxlint`) rejects Alpine musl and is unused for API build.
+RUN pnpm install --frozen-lockfile --ignore-scripts
 
 COPY --from=prepare /app/out/full/ .
 COPY --from=prepare /app/tsconfig.base.json ./tsconfig.base.json
@@ -48,7 +49,7 @@ COPY --from=prepare /app/tsconfig.base.json ./tsconfig.base.json
 # ENV TURBO_TOKEN=$TURBO_TOKEN
 
 RUN pnpm turbo build --filter=@metamorph/api...
-RUN pnpm prune --prod
+RUN pnpm prune --prod --ignore-scripts
 
 # ---
 FROM base AS runner
