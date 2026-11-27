@@ -7,8 +7,8 @@ export const config = {
   repo: "nucleuseru/metamorph",
   codeConnectionId: "cb9ea683-0227-4931-884e-21d129faf3a6",
   clientOrigin: {
-    production: "metamorph-edit.vercel.app",
-    development: "metamorph-preview.vercel.app",
+    production: "https://metamorph-edit.vercel.app",
+    development: "https://metamorph-preview.vercel.app",
   },
   alertEmail: "nucleuserumagborie@gmail.com",
 } as const;
