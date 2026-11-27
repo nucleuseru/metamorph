@@ -554,6 +554,7 @@ export class RealtimeSessionClient {
       await this.audioPipeline.start({
         inputSampleRate: aCfg.input_sample_rate,
         outputSampleRate: aCfg.output_sample_rate,
+        blockTimeS: aCfg.block_time_s,
         micDeviceId: this.micDeviceId,
         speakerDeviceId: this.speakerDeviceId,
         micMuted: this.micMuted,
@@ -601,6 +602,9 @@ export class RealtimeSessionClient {
     video?: VideoStartConfig | null;
     audio?: AudioStartConfig | null;
   }): void {
+    if (typeof patch.audio?.block_time_s === "number") {
+      this.audioPipeline?.setBlockTimeS(patch.audio.block_time_s);
+    }
     this.sendJson({ type: "update_config", ...patch });
   }
 

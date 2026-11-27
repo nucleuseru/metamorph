@@ -26,6 +26,7 @@ from metamorph_engine.pipelines.base import (
     VoiceSession,
     encode_pcm_bytes,
     resample_audio_linear,
+    soft_limit_audio,
 )
 from metamorph_engine.protocol import AudioCodec, FrameFlags
 
@@ -522,6 +523,7 @@ class SeedVCVoiceSession(VoiceSession):
                 emitted_np = self._resample_outgoing(
                     emitted_tensor, self._config.output_sample_rate
                 )
+                emitted_np = soft_limit_audio(emitted_np)
 
         self._out_seq += 1
         return AudioChunkOut(
@@ -790,13 +792,24 @@ class SeedVCVoicePipeline(VoicePipeline):
         torch = loaded.torch
         torchaudio = loaded.torchaudio
         sr = loaded.sr
-
-        resampled = resample_audio_linear(audio_f32, sample_rate, sr)
         max_samples = int(sr * self.settings.voice_max_prompt_length_s)
-        clipped = resampled[:max_samples]
 
         with self.infer_lock, torch.inference_mode():
-            ref_tensor = torch.from_numpy(clipped).to(loaded.device)
+            if sample_rate == sr:
+                ref_tensor = torch.from_numpy(
+                    np.asarray(audio_f32[:max_samples], dtype=np.float32)
+                ).to(loaded.device)
+            elif torchaudio is not None:
+                raw_max = int(sample_rate * self.settings.voice_max_prompt_length_s) + sample_rate
+                raw_tensor = torch.from_numpy(np.asarray(audio_f32[:raw_max], dtype=np.float32)).to(
+                    loaded.device
+                )
+                ref_tensor = torchaudio.functional.resample(raw_tensor, sample_rate, sr)[
+                    :max_samples
+                ]
+            else:
+                resampled = resample_audio_linear(audio_f32, sample_rate, sr)
+                ref_tensor = torch.from_numpy(resampled[:max_samples]).to(loaded.device)
             waves_16k = torchaudio.functional.resample(ref_tensor, sr, 16000)
             s_ori = loaded.semantic_fn(waves_16k.unsqueeze(0))
             feat2 = torchaudio.compliance.kaldi.fbank(

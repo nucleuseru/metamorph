@@ -968,3 +968,19 @@ def test_seedvc_checkpoint_loader_recovers_from_corrupted_volume_file(tmp_path: 
     assert len(calls) == 1
     assert calls[0][1] is True
     assert corrupted.read_bytes() == b"valid-checkpoint-bytes"
+
+
+def test_soft_limit_audio_transparent_below_threshold_and_bounds_peaks() -> None:
+    """Verify soft_limit_audio preserves normal speech levels and smoothly caps hot peaks."""
+    from metamorph_engine.pipelines.base import soft_limit_audio
+
+    quiet = np.array([-0.85, -0.2, 0.0, 0.4, 0.9], dtype=np.float32)
+    np.testing.assert_allclose(soft_limit_audio(quiet), quiet, atol=1e-7)
+
+    hot = np.array([-2.5, -1.2, -0.5, 0.0, 0.5, 1.2, 2.5], dtype=np.float32)
+    limited = soft_limit_audio(hot, threshold=0.9, ceiling=0.98)
+    assert limited.dtype == np.float32
+    np.testing.assert_allclose(limited[2:5], hot[2:5], atol=1e-7)
+    assert float(np.max(np.abs(limited))) < 0.98
+    assert float(limited[0]) < float(limited[1]) < -0.9
+    assert 0.9 < float(limited[5]) < float(limited[6]) < 0.98
