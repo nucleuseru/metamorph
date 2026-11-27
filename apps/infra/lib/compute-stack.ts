@@ -97,10 +97,15 @@ export class ComputeStack extends cdk.Stack {
       removalPolicy: isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
     });
 
-    // t4g.small (2 vCPU ARM64 Graviton, 2 GiB RAM) for Effect API, WS relay, and migrations
+    // t4g.small (2 vCPU ARM64 Graviton, 2 GiB RAM) for Effect API, WS relay, and migrations.
+    // Prefer the second AZ (eu-north-1b) where t4g.small capacity is available.
+    const targetAz = props.vpc.availabilityZones[1];
     const serverInstance = new ec2.Instance(this, "ServerInstance", {
       vpc: props.vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PUBLIC,
+        ...(targetAz ? { availabilityZones: [targetAz] } : {}),
+      },
       associatePublicIpAddress: true,
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.SMALL),
       machineImage: resolvePinnedAl2023Arm64Ami(this),
