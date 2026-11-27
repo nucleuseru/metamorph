@@ -54,6 +54,10 @@ on:
         description: "Install flash-attn-4 for B200 (full target)"
         type: boolean
         default: false
+      bundle_voice_weights:
+        description: "Bake pruned Seed-VC checkpoints into voice target image"
+        type: boolean
+        default: true
       max_jobs:
         description: "Parallel CUDA compiler jobs (full target)"
         type: string
@@ -233,6 +237,7 @@ jobs:
             BUILD_FP8=${{ github.event_name == 'workflow_dispatch' && inputs.build_fp8 == false && '0' || '1' }}
             INSTALL_SAGE_ATTN=${{ github.event_name == 'workflow_dispatch' && inputs.install_sage_attn == false && '0' || '1' }}
             INSTALL_FA4=${{ github.event_name == 'workflow_dispatch' && inputs.install_fa4 == true && '1' || '0' }}
+            BUNDLE_VOICE_WEIGHTS=${{ github.event_name == 'workflow_dispatch' && inputs.bundle_voice_weights == false && '0' || '1' }}
             MAX_JOBS=${{ inputs.max_jobs || '1' }}
 
       - name: Smoke-test mock container

@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${JOYOMNI_CKPT_ROOT:-${MODEL_VOLUME_DIR:-/models}/checkpoints}"
 WANT_VOICE=0
 WANT_VIDEO=0
 FORCE=0
 DRY_RUN=0
+PRUNE_XLSR=1
+REMOVE_UNPRUNED_XLSR=0
 
 usage() {
     cat <<'EOF'
@@ -14,13 +17,16 @@ Usage: download_models.sh [options]
 Download Seed-VC and JoyAI-Video-Edit checkpoints into a model volume directory.
 
 Options:
-  --dest <dir>      Checkpoint root (default: $MODEL_VOLUME_DIR/checkpoints or /models/checkpoints)
-  --voice           Download Seed-VC v1 real-time checkpoints (XLSR, DiT, HiFT)
-  --video           Download JoyAI-Video-Edit DiT, xVAE, and MiMo-VL weights
-  --all             Download voice and video checkpoints
-  --force           Re-download even if destination files already exist
-  --dry-run         Print download actions without executing
-  -h, --help        Show this help
+  --dest <dir>            Checkpoint root (default: $MODEL_VOLUME_DIR/checkpoints or /models/checkpoints)
+  --voice                 Download Seed-VC v1 real-time checkpoints (XLSR, DiT, HiFT)
+  --video                 Download JoyAI-Video-Edit DiT, xVAE, and MiMo-VL weights
+  --all                   Download voice and video checkpoints
+  --prune-xlsr            Prune XLSR-300M to 12 layers float16 safetensors (default: on)
+  --no-prune-xlsr         Skip offline XLSR pruning
+  --remove-unpruned-xlsr  Delete the unpruned 24-layer fp32 XLSR directory after pruning
+  --force                 Re-download even if destination files already exist
+  --dry-run               Print download actions without executing
+  -h, --help              Show this help
 EOF
 }
 
@@ -30,6 +36,9 @@ while [ "$#" -gt 0 ]; do
         --voice) WANT_VOICE=1; shift ;;
         --video) WANT_VIDEO=1; shift ;;
         --all) WANT_VOICE=1; WANT_VIDEO=1; shift ;;
+        --prune-xlsr) PRUNE_XLSR=1; shift ;;
+        --no-prune-xlsr) PRUNE_XLSR=0; shift ;;
+        --remove-unpruned-xlsr) REMOVE_UNPRUNED_XLSR=1; shift ;;
         --force) FORCE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -104,7 +113,27 @@ if [ "$WANT_VOICE" = "1" ]; then
     hf_download_file "FunAudioLLM/CosyVoice-300M" "hift.pt" "$SEEDVC_CACHE"
     hf_download_file "funasr/campplus" "campplus_cn_common.bin" "$SEEDVC_CACHE"
     # Pre-cache XLSR feature extractor and encoder weights as flat files (FUSE/global-volume safe)
-    hf_download_repo "facebook/wav2vec2-xls-r-300m" "$SEEDVC_CACHE/facebook__wav2vec2-xls-r-300m" "" '["config.json", "preprocessor_config.json", "pytorch_model.bin", "model.safetensors"]'
+    XLSR_RAW_DIR="$SEEDVC_CACHE/facebook__wav2vec2-xls-r-300m"
+    XLSR_PRUNED_DIR="$SEEDVC_CACHE/facebook__wav2vec2-xls-r-300m-l12-fp16"
+    hf_download_repo "facebook/wav2vec2-xls-r-300m" "$XLSR_RAW_DIR" "" '["config.json", "preprocessor_config.json", "pytorch_model.bin", "model.safetensors"]'
+
+    if [ "$PRUNE_XLSR" = "1" ]; then
+        prune_args=(--src "$XLSR_RAW_DIR" --dest "$XLSR_PRUNED_DIR" --layers 12 --dtype float16)
+        if [ "$REMOVE_UNPRUNED_XLSR" = "1" ]; then
+            prune_args+=(--remove-src)
+        fi
+        if [ "$DRY_RUN" = "1" ]; then
+            run_or_echo "$PYTHON_BIN" "$SCRIPT_DIR/prune_xlsr.py" "${prune_args[@]}"
+        elif [ "$FORCE" = "1" ] || [ ! -f "$XLSR_PRUNED_DIR/model.safetensors" ]; then
+            if "$PYTHON_BIN" -c "import torch, transformers" >/dev/null 2>&1; then
+                "$PYTHON_BIN" "$SCRIPT_DIR/prune_xlsr.py" "${prune_args[@]}"
+            else
+                echo "[download_models] Skipping XLSR pruning (torch/transformers not installed in $PYTHON_BIN)"
+            fi
+        else
+            echo "[download_models] Pruned XLSR checkpoint already present at $XLSR_PRUNED_DIR"
+        fi
+    fi
 fi
 
 if [ "$WANT_VIDEO" = "1" ]; then

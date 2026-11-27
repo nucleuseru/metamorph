@@ -32,9 +32,9 @@ RUN uv sync --frozen --no-dev --no-install-workspace --package metamorph-engine
 COPY packages/shared-py/src ./packages/shared-py/src
 COPY apps/engine-py/src ./apps/engine-py/src
 COPY apps/engine-py/docker/entrypoint.sh ./docker/entrypoint.sh
-COPY apps/engine-py/scripts/download_models.sh ./scripts/download_models.sh
+COPY apps/engine-py/scripts ./scripts
 
-RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh \
+RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py \
     && uv sync --frozen --no-dev --inexact --package metamorph-engine
 
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -69,6 +69,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     libsox3 \
     sox \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -95,13 +96,25 @@ RUN uv sync --frozen --no-dev --no-install-workspace --package metamorph-engine 
         soundfile>=0.12.1 \
         transformers==4.46.3
 
+ARG BUNDLE_VOICE_WEIGHTS=1
+
+COPY apps/engine-py/scripts ./scripts
+
+# Bake pruned Seed-VC checkpoints (~565 MB) onto local NVMe so voice pods skip FUSE & HF API calls
+RUN chmod +x /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py \
+    && if [ "${BUNDLE_VOICE_WEIGHTS}" = "1" ]; then \
+        ENGINE_VOICE_CACHE_DIR=/app/bundled_models/seed-vc \
+        /app/scripts/download_models.sh --voice --prune-xlsr --remove-unpruned-xlsr \
+        && rm -f /app/bundled_models/seed-vc/campplus_cn_common.bin \
+        && rm -rf /root/.cache/huggingface; \
+    fi
+
 COPY packages/shared-py/src ./packages/shared-py/src
 COPY apps/engine-py/src ./apps/engine-py/src
 COPY vendor/seed-vc ./vendor/seed-vc
 COPY apps/engine-py/docker/entrypoint.sh ./docker/entrypoint.sh
-COPY apps/engine-py/scripts/download_models.sh ./scripts/download_models.sh
 
-RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh \
+RUN chmod +x /app/docker/entrypoint.sh \
     && uv sync --frozen --no-dev --inexact --package metamorph-engine \
     && mkdir -p /models
 
@@ -253,6 +266,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     libsox3 \
     sox \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -268,9 +282,9 @@ COPY apps/engine-py/src ./apps/engine-py/src
 COPY vendor/seed-vc ./vendor/seed-vc
 COPY vendor/JoyAI-Video-Edit/deploy ./vendor/JoyAI-Video-Edit/deploy
 COPY apps/engine-py/docker/entrypoint.sh ./docker/entrypoint.sh
-COPY apps/engine-py/scripts/download_models.sh ./scripts/download_models.sh
+COPY apps/engine-py/scripts ./scripts
 
-RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh \
+RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py \
     && uv sync --frozen --no-dev --inexact --package metamorph-engine \
     && mkdir -p /models
 

@@ -43,6 +43,7 @@ vendor/JoyAI-Video-Edit/training
 vendor/JoyAI-Video-Edit/deploy/joyomni_ops/tests
 vendor/JoyAI-Video-Edit/deploy/deps
 vendor/JoyAI-Video-Edit/deploy/recordings
+vendor/JoyAI-Video-Edit/deploy/rv2v_reference
 vendor/JoyAI-Video-Edit/deploy/tmp
 vendor/seed-vc/assets
 vendor/seed-vc/examples

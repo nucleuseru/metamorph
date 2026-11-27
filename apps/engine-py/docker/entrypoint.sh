@@ -32,7 +32,16 @@ export TORCH_HOME="${TORCH_HOME:-$MODEL_VOLUME_DIR/torch_cache}"
 CKPT_ROOT="${JOYOMNI_CKPT_ROOT:-$MODEL_VOLUME_DIR/checkpoints}"
 export JOYOMNI_CKPT_ROOT="$CKPT_ROOT"
 
-export ENGINE_VOICE_CACHE_DIR="${ENGINE_VOICE_CACHE_DIR:-$CKPT_ROOT/seed-vc}"
+# Prefer image-baked local NVMe Seed-VC weights when present (zero FUSE/HF latency on boot)
+BUNDLED_VOICE_DIR="${ENGINE_BUNDLED_VOICE_DIR:-$APP_ROOT/bundled_models/seed-vc}"
+if [ -z "${ENGINE_VOICE_CACHE_DIR:-}" ]; then
+    if [ -f "$BUNDLED_VOICE_DIR/DiT_uvit_tat_xlsr_ema.pth" ]; then
+        ENGINE_VOICE_CACHE_DIR="$BUNDLED_VOICE_DIR"
+    else
+        ENGINE_VOICE_CACHE_DIR="$CKPT_ROOT/seed-vc"
+    fi
+fi
+export ENGINE_VOICE_CACHE_DIR
 export ENGINE_VIDEO_DIT_CKPT="${ENGINE_VIDEO_DIT_CKPT:-$CKPT_ROOT/JoyAI-Video-Edit/dit/joyai_video_edit_dit_1101_face++.pth}"
 export ENGINE_VIDEO_VAE_CKPT="${ENGINE_VIDEO_VAE_CKPT:-$CKPT_ROOT/JoyAI-Video-Edit/vae}"
 export ENGINE_VIDEO_TEXT_ENCODER_CKPT="${ENGINE_VIDEO_TEXT_ENCODER_CKPT:-$CKPT_ROOT/MiMo-VL-7B-RL-2508}"
@@ -119,6 +128,7 @@ is_fuse_or_network_path() {
 }
 
 VOLUME_CACHE_ROOT="$MODEL_VOLUME_DIR/cache/$GPU_SLUG"
+export JOYOMNI_VOLUME_CACHE_ROOT="${JOYOMNI_VOLUME_CACHE_ROOT:-$VOLUME_CACHE_ROOT}"
 if [ -z "${JOYOMNI_CACHE_ROOT:-}" ]; then
     if is_fuse_or_network_path "$MODEL_VOLUME_DIR"; then
         # Avoid TorchInductor/Triton lock & rename hangs on FUSE/network global volumes
@@ -142,9 +152,14 @@ HUGGINGFACE_HUB_CACHE=$HUGGINGFACE_HUB_CACHE
 TORCH_HOME=$TORCH_HOME
 JOYOMNI_CKPT_ROOT=$JOYOMNI_CKPT_ROOT
 JOYOMNI_CACHE_ROOT=$JOYOMNI_CACHE_ROOT
+JOYOMNI_VOLUME_CACHE_ROOT=$JOYOMNI_VOLUME_CACHE_ROOT
 JOYOMNI_FP8_IMG=$JOYOMNI_FP8_IMG
 JOYOMNI_FP8_TXT=$JOYOMNI_FP8_TXT
 JOYOMNI_CUDA_GRAPH=$JOYOMNI_CUDA_GRAPH
+JOYOMNI_FA4_ATTN=${JOYOMNI_FA4_ATTN:-}
+JOYOMNI_SAGE_ATTN=${JOYOMNI_SAGE_ATTN:-}
+JOYOMNI_FP8_FAST_ACCUM=${JOYOMNI_FP8_FAST_ACCUM:-}
+JOYOMNI_LOW_VRAM=${JOYOMNI_LOW_VRAM:-}
 TORCHINDUCTOR_CACHE_DIR=$TORCHINDUCTOR_CACHE_DIR
 TRITON_CACHE_DIR=$TRITON_CACHE_DIR
 CUDA_CACHE_PATH=$CUDA_CACHE_PATH
@@ -165,10 +180,26 @@ mkdir -p \
     "$TRITON_CACHE_DIR" \
     "$CUDA_CACHE_PATH"
 
-# Seed local SSD compile cache from persistent volume if pre-populated
-if [ "$JOYOMNI_CACHE_ROOT" != "$VOLUME_CACHE_ROOT" ] && [ -d "$VOLUME_CACHE_ROOT" ]; then
-    printf '[entrypoint] Seeding local compile cache %s from %s\n' "$JOYOMNI_CACHE_ROOT" "$VOLUME_CACHE_ROOT" >&2
-    cp -rn "$VOLUME_CACHE_ROOT/." "$JOYOMNI_CACHE_ROOT/" 2>/dev/null || true
+# Seed local SSD compile cache from persistent volume archive (fast single-file read) or directory
+if [ "$JOYOMNI_CACHE_ROOT" != "$JOYOMNI_VOLUME_CACHE_ROOT" ]; then
+    if [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" ] && command -v zstd >/dev/null 2>&1; then
+        printf '[entrypoint] Extracting compile cache archive %s.tar.zst -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
+        tar --zstd -xf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
+    elif [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" ]; then
+        printf '[entrypoint] Extracting compile cache archive %s.tar.gz -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
+        tar -xzf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
+    elif [ -d "$JOYOMNI_VOLUME_CACHE_ROOT" ]; then
+        printf '[entrypoint] Seeding local compile cache %s from %s\n' "$JOYOMNI_CACHE_ROOT" "$JOYOMNI_VOLUME_CACHE_ROOT" >&2
+        cp -rn "$JOYOMNI_VOLUME_CACHE_ROOT/." "$JOYOMNI_CACHE_ROOT/" 2>/dev/null || true
+    fi
+elif [ ! -f "$JOYOMNI_CACHE_ROOT/.metamorph_compile_mode" ]; then
+    if [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" ] && command -v zstd >/dev/null 2>&1; then
+        printf '[entrypoint] Extracting compile cache archive %s.tar.zst -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
+        tar --zstd -xf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
+    elif [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" ]; then
+        printf '[entrypoint] Extracting compile cache archive %s.tar.gz -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
+        tar -xzf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
+    fi
 fi
 
 # Optionally bootstrap missing models on startup

@@ -12,6 +12,7 @@ SCRIPTS_DIR = ENGINE_DIR / "scripts"
 ALL_SHELL_SCRIPTS = [
     ENTRYPOINT,
     SCRIPTS_DIR / "download_models.sh",
+    SCRIPTS_DIR / "prewarm_cache.sh",
 ]
 
 
@@ -21,6 +22,17 @@ def test_shell_scripts_are_executable_and_valid_bash() -> None:
         assert os.access(script, os.X_OK), f"Script is not executable: {script}"
         res = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
         assert res.returncode == 0, f"bash -n failed for {script}: {res.stderr}"
+
+    prune_script = SCRIPTS_DIR / "prune_xlsr.py"
+    assert prune_script.is_file()
+    assert os.access(prune_script, os.X_OK)
+    res_help = subprocess.run(
+        ["python3", str(prune_script), "--help"],
+        capture_output=True,
+        text=True,
+    )
+    assert res_help.returncode == 0, res_help.stderr
+    assert "--layers" in res_help.stdout
 
 
 def test_entrypoint_resolves_volume_paths_and_respects_overrides(tmp_path: Path) -> None:
@@ -96,7 +108,12 @@ def test_github_workflow_builds_and_deploys_all_targets() -> None:
     assert all("matrix." not in line for line in job_if_lines)
 
     docker_content = dockerfile.read_text(encoding="utf-8")
+    dockerignore_content = (ENGINE_DIR / "Dockerfile.dockerignore").read_text(encoding="utf-8")
     assert "ARG INSTALL_SAGE_ATTN=1" in docker_content
+    assert "ARG BUNDLE_VOICE_WEIGHTS=1" in docker_content
+    assert "zstd" in docker_content
+    assert "vendor/JoyAI-Video-Edit/deploy/rv2v_reference" in dockerignore_content
+    assert "BUNDLE_VOICE_WEIGHTS=" in content
     assert 'NVCC_APPEND_FLAGS="--threads ${MAX_JOBS}"' in docker_content
     assert "python -m pip" not in docker_content
     assert "setup.py install" not in docker_content
@@ -184,3 +201,54 @@ def test_entrypoint_warns_for_dual_modality_on_32gb_gpu(tmp_path: Path) -> None:
         check=True,
     )
     assert "WARNING: Video + Voice together" not in video_only.stderr
+
+
+def test_entrypoint_prefers_bundled_voice_weights_and_extracts_cache_archive(
+    tmp_path: Path,
+) -> None:
+    bundled_dir = tmp_path / "bundled_seedvc"
+    bundled_dir.mkdir()
+    (bundled_dir / "DiT_uvit_tat_xlsr_ema.pth").write_bytes(b"dit")
+
+    vol_dir = tmp_path / "vol"
+    cache_src = tmp_path / "cache_src"
+    (cache_src / "torchinductor").mkdir(parents=True)
+    (cache_src / "torchinductor" / "cached_kernel.bin").write_bytes(b"ok")
+    (cache_src / ".metamorph_compile_mode").write_text(
+        "max-autotune-no-cudagraphs\n", encoding="utf-8"
+    )
+
+    vol_cache_dir = vol_dir / "cache"
+    vol_cache_dir.mkdir(parents=True)
+    archive_path = vol_cache_dir / "cpu.tar.gz"
+    subprocess.run(
+        ["tar", "-czf", str(archive_path), "-C", str(cache_src), "."],
+        check=True,
+    )
+
+    local_cache = tmp_path / "local_ssd_cache"
+    env = {
+        "PATH": os.environ["PATH"],
+        "ENGINE_BACKEND": "mock",
+        "MODEL_VOLUME_DIR": str(vol_dir),
+        "ENGINE_BUNDLED_VOICE_DIR": str(bundled_dir),
+        "JOYOMNI_CACHE_ROOT": str(local_cache),
+        "ENGINE_CMD": "true",
+    }
+
+    env_res = subprocess.run(
+        [str(ENTRYPOINT), "--print-env"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    parsed = dict(line.split("=", 1) for line in env_res.stdout.strip().splitlines() if "=" in line)
+    assert parsed["ENGINE_VOICE_CACHE_DIR"] == str(bundled_dir)
+    assert parsed["JOYOMNI_VOLUME_CACHE_ROOT"] == str(vol_cache_dir / "cpu")
+
+    subprocess.run([str(ENTRYPOINT)], env=env, capture_output=True, text=True, check=True)
+    assert (local_cache / "torchinductor" / "cached_kernel.bin").read_bytes() == b"ok"
+    assert (local_cache / ".metamorph_compile_mode").read_text(
+        encoding="utf-8"
+    ).strip() == "max-autotune-no-cudagraphs"

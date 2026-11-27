@@ -36,14 +36,12 @@ const DEFAULT_VIDEO_STANDARD_GPUS: ReadonlyArray<string> = [
   "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
   "NVIDIA RTX 6000 Ada Generation",
   "NVIDIA L40S",
-  "NVIDIA A100 80GB PCIe",
 ];
 
 const DEFAULT_HIGH_OR_DUAL_GPUS: ReadonlyArray<string> = [
   "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
   "NVIDIA RTX 6000 Ada Generation",
   "NVIDIA L40S",
-  "NVIDIA A100 80GB PCIe",
 ];
 
 /** Maps requested modalities and quality tier to container target, GPU requirements, and defaults. */
@@ -170,6 +168,9 @@ export function buildEngineEnv(input: BuildEngineEnvInput): Record<string, strin
   }
   if (input.config.modelVolumeDir) {
     env["MODEL_VOLUME_DIR"] = input.config.modelVolumeDir;
+  }
+  if (input.config.videoCompileMode && input.hardware.enableVideo) {
+    env["ENGINE_VIDEO_COMPILE_MODE"] = input.config.videoCompileMode;
   }
   if (input.initialPrompt) {
     env["ENGINE_INITIAL_PROMPT"] = input.initialPrompt;

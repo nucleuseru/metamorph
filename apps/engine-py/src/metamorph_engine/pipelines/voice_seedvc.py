@@ -6,11 +6,14 @@ import contextlib
 import importlib
 import importlib.util
 import logging
+import os
 import shutil
 import sys
 import tempfile
 import threading
+import time
 import types
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -130,36 +133,106 @@ def _load_torch_hf_checkpoint(
         return loaded
 
 
+def _has_local_hf_weights(directory: Path) -> bool:
+    """Return True when a flat local HF directory contains config + non-empty weight file."""
+    if not (directory / "config.json").is_file():
+        return False
+    for name in ("model.safetensors", "pytorch_model.bin"):
+        weight_path = directory / name
+        if weight_path.is_file() and (_file_size_or_none(weight_path) or 0) > 0:
+            return True
+    return False
+
+
+def _is_remote_or_runpod_volume(path: str | Path) -> bool:
+    """Return True when `path` resides on a RunPod volume or FUSE/network mount."""
+    from metamorph_engine.pipelines.video_joyai import _is_network_or_fuse_path
+
+    if _is_network_or_fuse_path(path):
+        return True
+    if os.environ.get("RUNPOD_POD_ID"):
+        resolved = str(Path(path))
+        if resolved.startswith(("/models/", "/workspace/", "/runpod-volume/")):
+            return True
+    return False
+
+
+def _call_from_pretrained(fn: Any, source: str, **kwargs: Any) -> Any:
+    """Invoke `from_pretrained` with progressive kwarg fallback for older transformers / stubs."""
+    active = {k: v for k, v in kwargs.items() if v is not None}
+    drop_order = ("disable_mmap", "torch_dtype", "local_files_only")
+    while True:
+        try:
+            return fn(source, **active)
+        except TypeError:
+            dropped = False
+            for key in drop_order:
+                if key in active:
+                    active.pop(key)
+                    dropped = True
+                    break
+            if not dropped:
+                raise
+
+
 def _load_xlsr_model(
     transformers_mod: Any,
     hf_hub: Any,
     *,
     model_name: str,
     cache_dir: str,
+    output_layer: int | None = None,
+    torch_dtype: Any | None = None,
 ) -> tuple[Any, Any]:
-    """Load XLSR feature extractor and encoder using symlink-free storage with SSD fallback."""
-    xlsr_dir = Path(cache_dir) / model_name.replace("/", "__")
-    snapshot_fn = getattr(hf_hub, "snapshot_download", None)
+    """Load XLSR feature extractor and encoder using local short-circuit + pruned fp16 support."""
+    slug = model_name.replace("/", "__")
+    pruned_dir = Path(cache_dir) / f"{slug}-l{output_layer}-fp16" if output_layer else None
+    standard_dir = Path(cache_dir) / slug
+
     source = model_name
-    if callable(snapshot_fn):
-        with contextlib.suppress(Exception):
-            xlsr_dir.mkdir(parents=True, exist_ok=True)
-            snapshot_fn(
-                repo_id=model_name,
-                local_dir=str(xlsr_dir),
-                allow_patterns=[
-                    "config.json",
-                    "preprocessor_config.json",
-                    "pytorch_model.bin",
-                    "model.safetensors",
-                ],
-            )
-            if (xlsr_dir / "config.json").is_file():
-                source = str(xlsr_dir)
+    local_only = False
+    if pruned_dir is not None and _has_local_hf_weights(pruned_dir):
+        source = str(pruned_dir)
+        local_only = True
+        logger.info("Loading pre-pruned XLSR checkpoint from %s (offline)", source)
+    elif _has_local_hf_weights(standard_dir):
+        source = str(standard_dir)
+        local_only = True
+        logger.info("Loading cached XLSR checkpoint from %s (offline)", source)
+    else:
+        snapshot_fn = getattr(hf_hub, "snapshot_download", None)
+        if callable(snapshot_fn):
+            with contextlib.suppress(Exception):
+                standard_dir.mkdir(parents=True, exist_ok=True)
+                snapshot_fn(
+                    repo_id=model_name,
+                    local_dir=str(standard_dir),
+                    allow_patterns=[
+                        "config.json",
+                        "preprocessor_config.json",
+                        "pytorch_model.bin",
+                        "model.safetensors",
+                    ],
+                )
+                if _has_local_hf_weights(standard_dir):
+                    source = str(standard_dir)
+                    local_only = True
+
+    disable_mmap = local_only and _is_remote_or_runpod_volume(source)
 
     try:
-        feat_ext = transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained(source)
-        w2v = transformers_mod.Wav2Vec2Model.from_pretrained(source)
+        feat_ext = _call_from_pretrained(
+            transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained,
+            source,
+            local_files_only=True if local_only else None,
+        )
+        w2v = _call_from_pretrained(
+            transformers_mod.Wav2Vec2Model.from_pretrained,
+            source,
+            local_files_only=True if local_only else None,
+            torch_dtype=torch_dtype,
+            disable_mmap=True if disable_mmap else None,
+        )
         return feat_ext, w2v
     except (EOFError, RuntimeError, OSError) as first_exc:
         logger.warning(
@@ -171,6 +244,7 @@ def _load_xlsr_model(
         )
         local_tmp = Path(tempfile.gettempdir()) / "metamorph-voice-cache" / "xlsr"
         local_tmp.mkdir(parents=True, exist_ok=True)
+        snapshot_fn = getattr(hf_hub, "snapshot_download", None)
         try:
             if callable(snapshot_fn):
                 snapshot_fn(
@@ -184,8 +258,17 @@ def _load_xlsr_model(
                         "model.safetensors",
                     ],
                 )
-                feat_ext = transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained(str(local_tmp))
-                w2v = transformers_mod.Wav2Vec2Model.from_pretrained(str(local_tmp))
+                feat_ext = _call_from_pretrained(
+                    transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained,
+                    str(local_tmp),
+                    local_files_only=True,
+                )
+                w2v = _call_from_pretrained(
+                    transformers_mod.Wav2Vec2Model.from_pretrained,
+                    str(local_tmp),
+                    local_files_only=True,
+                    torch_dtype=torch_dtype,
+                )
                 return feat_ext, w2v
             feat_ext = transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained(
                 model_name, cache_dir=str(local_tmp), force_download=True
@@ -648,18 +731,36 @@ class SeedVCVoicePipeline(VoicePipeline):
                 )
             )
 
+        t0 = time.monotonic()
+
         with open(cfg_path, encoding="utf-8") as fh:
             config = yaml.safe_load(fh)
         model_params = commons.recursive_munch(config["model_params"])
         model_params.dit_type = "DiT"
-        model = commons.build_model(model_params, stage="DiT")
         sr = int(config["preprocess_params"]["sr"])
         hop_length = int(config["preprocess_params"]["spect_params"]["hop_length"])
 
-        if use_custom_ckpt:
-            _load_seedvc_checkpoint(torch, model, str(self.settings.voice_checkpoint_path))
-        else:
-            dit_state = _load_torch_hf_checkpoint(
+        vocoder_type = model_params.vocoder.type
+        if vocoder_type != "hifigan":
+            raise ValueError(f"Unsupported Seed-VC vocoder type: {vocoder_type}")
+        tokenizer_type = model_params.speech_tokenizer.type
+        if tokenizer_type != "xlsr":
+            raise ValueError(f"Unsupported Seed-VC speech tokenizer: {tokenizer_type}")
+
+        hifigan_gen_mod = importlib.import_module("modules.hifigan.generator")
+        hifigan_f0_mod = importlib.import_module("modules.hifigan.f0_predictor")
+        hift_cfg_path = seed_vc_dir / "configs" / "hifigan.yml"
+        with open(hift_cfg_path, encoding="utf-8") as fh:
+            hift_config = yaml.safe_load(fh)
+
+        model_name = config["model_params"]["speech_tokenizer"]["name"]
+        output_layer = int(config["model_params"]["speech_tokenizer"]["output_layer"])
+        xlsr_dtype = torch.float16 if device.type == "cuda" else None
+
+        def _load_dit_state() -> Any:
+            if use_custom_ckpt:
+                return _torch_load_compat(torch, str(self.settings.voice_checkpoint_path))
+            return _load_torch_hf_checkpoint(
                 torch,
                 hf_hub,
                 repo_id="Plachta/Seed-VC",
@@ -667,28 +768,20 @@ class SeedVCVoicePipeline(VoicePipeline):
                 cache_dir=cache_dir,
                 label="Seed-VC DiT checkpoint",
             )
-            _load_seedvc_state_dict(model, dit_state)
-        for key in model:
-            model[key].eval()
-            model[key].to(device)
-        model.cfm.estimator.setup_caches(max_batch_size=1, max_seq_length=8192)
 
-        # CAMPPlus speaker encoder (bundled in vendor/seed-vc/)
-        local_campplus = seed_vc_dir / "campplus_cn_common.bin"
-        campplus_model = campplus_mod.CAMPPlus(feat_dim=80, embedding_size=192)
-        campplus_state: Any | None = None
-        if local_campplus.is_file() and (_file_size_or_none(local_campplus) or 0) > 0:
-            try:
-                campplus_state = _torch_load_compat(torch, str(local_campplus))
-            except (EOFError, RuntimeError, OSError) as exc:
-                logger.warning(
-                    "Bundled CAMPPlus checkpoint at %s failed to load (%s: %s); falling back to HF",
-                    local_campplus,
-                    type(exc).__name__,
-                    exc,
-                )
-        if campplus_state is None:
-            campplus_state = _load_torch_hf_checkpoint(
+        def _load_campplus_state() -> Any:
+            local_campplus = seed_vc_dir / "campplus_cn_common.bin"
+            if local_campplus.is_file() and (_file_size_or_none(local_campplus) or 0) > 0:
+                try:
+                    return _torch_load_compat(torch, str(local_campplus))
+                except (EOFError, RuntimeError, OSError) as exc:
+                    logger.warning(
+                        "Bundled CAMPPlus at %s failed to load (%s: %s); falling back to HF",
+                        local_campplus,
+                        type(exc).__name__,
+                        exc,
+                    )
+            return _load_torch_hf_checkpoint(
                 torch,
                 hf_hub,
                 repo_id="funasr/campplus",
@@ -696,49 +789,75 @@ class SeedVCVoicePipeline(VoicePipeline):
                 cache_dir=cache_dir,
                 label="CAMPPlus speaker encoder",
             )
+
+        def _load_hift_state() -> Any:
+            return _load_torch_hf_checkpoint(
+                torch,
+                hf_hub,
+                repo_id="FunAudioLLM/CosyVoice-300M",
+                filename="hift.pt",
+                cache_dir=cache_dir,
+                label="HiFT vocoder checkpoint",
+            )
+
+        def _load_xlsr_pair() -> tuple[Any, Any]:
+            return _load_xlsr_model(
+                transformers,
+                hf_hub,
+                model_name=model_name,
+                cache_dir=cache_dir,
+                output_layer=output_layer,
+                torch_dtype=xlsr_dtype,
+            )
+
+        # Load CPU weights concurrently to overlap file I/O and deserialization
+        if self.settings.voice_parallel_load:
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix="seedvc-load") as pool:
+                fut_dit = pool.submit(_load_dit_state)
+                fut_campplus = pool.submit(_load_campplus_state)
+                fut_hift = pool.submit(_load_hift_state)
+                fut_xlsr = pool.submit(_load_xlsr_pair)
+
+                model = commons.build_model(model_params, stage="DiT")
+                campplus_model = campplus_mod.CAMPPlus(feat_dim=80, embedding_size=192)
+                hift_gen = hifigan_gen_mod.HiFTGenerator(
+                    **hift_config["hift"],
+                    f0_predictor=hifigan_f0_mod.ConvRNNF0Predictor(**hift_config["f0_predictor"]),
+                )
+
+                dit_state = fut_dit.result()
+                campplus_state = fut_campplus.result()
+                hift_state = fut_hift.result()
+                feat_ext, w2v = fut_xlsr.result()
+        else:
+            model = commons.build_model(model_params, stage="DiT")
+            campplus_model = campplus_mod.CAMPPlus(feat_dim=80, embedding_size=192)
+            hift_gen = hifigan_gen_mod.HiFTGenerator(
+                **hift_config["hift"],
+                f0_predictor=hifigan_f0_mod.ConvRNNF0Predictor(**hift_config["f0_predictor"]),
+            )
+            dit_state = _load_dit_state()
+            campplus_state = _load_campplus_state()
+            hift_state = _load_hift_state()
+            feat_ext, w2v = _load_xlsr_pair()
+
+        _load_seedvc_state_dict(model, dit_state)
+        for key in model:
+            model[key].eval()
+            model[key].to(device)
+        model.cfm.estimator.setup_caches(max_batch_size=1, max_seq_length=8192)
+
         campplus_model.load_state_dict(campplus_state)
         campplus_model.eval()
         campplus_model.to(device)
 
-        # Vocoder (HiFT for real-time v1 preset)
-        vocoder_type = model_params.vocoder.type
-        if vocoder_type != "hifigan":
-            raise ValueError(f"Unsupported Seed-VC vocoder type: {vocoder_type}")
-        hifigan_gen_mod = importlib.import_module("modules.hifigan.generator")
-        hifigan_f0_mod = importlib.import_module("modules.hifigan.f0_predictor")
-        hift_cfg_path = seed_vc_dir / "configs" / "hifigan.yml"
-        with open(hift_cfg_path, encoding="utf-8") as fh:
-            hift_config = yaml.safe_load(fh)
-        hift_gen = hifigan_gen_mod.HiFTGenerator(
-            **hift_config["hift"],
-            f0_predictor=hifigan_f0_mod.ConvRNNF0Predictor(**hift_config["f0_predictor"]),
-        )
-        hift_state = _load_torch_hf_checkpoint(
-            torch,
-            hf_hub,
-            repo_id="FunAudioLLM/CosyVoice-300M",
-            filename="hift.pt",
-            cache_dir=cache_dir,
-            label="HiFT vocoder checkpoint",
-        )
         hift_gen.load_state_dict(hift_state)
         hift_gen.eval()
         hift_gen.to(device)
         vocoder_fn = hift_gen
 
-        # Speech tokenizer (XLSR for real-time tiny preset)
-        tokenizer_type = model_params.speech_tokenizer.type
-        if tokenizer_type != "xlsr":
-            raise ValueError(f"Unsupported Seed-VC speech tokenizer: {tokenizer_type}")
-        model_name = config["model_params"]["speech_tokenizer"]["name"]
-        output_layer = config["model_params"]["speech_tokenizer"]["output_layer"]
-        feat_ext, w2v = _load_xlsr_model(
-            transformers,
-            hf_hub,
-            model_name=model_name,
-            cache_dir=cache_dir,
-        )
-        w2v.encoder.layers = w2v.encoder.layers[:output_layer]
+        if len(w2v.encoder.layers) > output_layer:
+            w2v.encoder.layers = w2v.encoder.layers[:output_layer]
         w2v = w2v.to(device).eval().half()
 
         def semantic_fn(waves_16k: Any) -> Any:
@@ -784,14 +903,18 @@ class SeedVCVoicePipeline(VoicePipeline):
             to_mel=to_mel,
         )
 
-        # Warmup pass with synthetic reference + non-silent source audio so full DiT/HiFT compiles
+        # Fast warmup pass (2 steps by default) to initialize CUDA/cuBLAS/cuDNN/mel caches
         if self.settings.warmup_on_startup:
+            warmup_steps = min(
+                self.settings.voice_warmup_diffusion_steps,
+                self.settings.voice_diffusion_steps,
+            )
             t_ref = np.arange(sr, dtype=np.float32) / float(sr)
             dummy_ref = (0.05 * np.sin(2.0 * np.pi * 220.0 * t_ref)).astype(np.float32)
             self.set_reference_audio(dummy_ref, sr)
             sess = self.create_session(
                 AudioSessionConfig(
-                    diffusion_steps=self.settings.voice_diffusion_steps,
+                    diffusion_steps=warmup_steps,
                     cfg_rate=self.settings.voice_cfg_rate,
                     block_time_s=self.settings.voice_block_time_s,
                     vad_threshold_db=-90.0,
@@ -815,6 +938,8 @@ class SeedVCVoicePipeline(VoicePipeline):
             self._prompt_condition = None
             self._mel2 = None
             self._style2 = None
+
+        logger.info("Seed-VC voice pipeline loaded and warmed up in %.1fs", time.monotonic() - t0)
 
     def set_reference_audio(self, audio_f32: np.ndarray, sample_rate: int) -> None:
         loaded = self.require_loaded()

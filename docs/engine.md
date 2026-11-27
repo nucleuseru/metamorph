@@ -108,10 +108,21 @@ Weights and per-GPU Triton/TorchInductor compile caches are mounted externally a
 │   └── seed-vc/
 ├── hf_cache/
 ├── torch_cache/
-└── cache/<gpu_slug>/                    # isolated torchinductor/triton/nv_compute caches
+└── cache/
+    ├── <gpu_slug>.tar.zst               # compressed TorchInductor/Triton/NV cache archive (fast FUSE extract)
+    ├── <gpu_slug>.compile_mode          # compile mode marker for the archive
+    └── <gpu_slug>/                      # isolated local/unpacked torchinductor/triton/nv_compute caches
 ```
 
-Populate a volume once using [`download_models.sh`](../apps/engine-py/scripts/download_models.sh) (or set `AUTO_DOWNLOAD_MODELS=true` on boot).
+Populate a volume once using [`download_models.sh`](../apps/engine-py/scripts/download_models.sh) (which also prunes XLSR-300M to 12-layer float16 safetensors via [`prune_xlsr.py`](../apps/engine-py/scripts/prune_xlsr.py)), or set `AUTO_DOWNLOAD_MODELS=true` on boot.
+
+To pre-warm a `max-autotune-no-cudagraphs` GPU compile archive once per GPU SKU (recommended for RTX 5090 / RTX PRO 6000 so production pods extract `<gpu_slug>.tar.zst` in ~1–2s and hit cached kernels immediately):
+
+```bash
+/app/scripts/prewarm_cache.sh --res 840x480
+```
+
+Voice-only images (`:voice`) bake pruned Seed-VC checkpoints (`~565 MB`) into `/app/bundled_models/seed-vc` by default (`BUNDLE_VOICE_WEIGHTS=1`), eliminating FUSE and HuggingFace API calls during voice startup.
 
 ### CI/CD (GitHub Actions -> Docker Hub)
 
@@ -143,24 +154,29 @@ Populate a volume once using [`download_models.sh`](../apps/engine-py/scripts/do
 
 ## Key Configuration (`ENGINE_*`)
 
-| Variable                                                        | Default                   | Description                                                                               |
-| :-------------------------------------------------------------- | :------------------------ | :---------------------------------------------------------------------------------------- |
-| `ENGINE_HOST` / `ENGINE_PORT`                                   | `0.0.0.0` / `8000`        | Bind address and port                                                                     |
-| `ENGINE_INSTANCE_ID` / `ENGINE_USER_ID`                         | `local-instance` / `None` | Dedicated instance and user binding                                                       |
-| `ENGINE_ENABLE_VOICE` / `ENGINE_ENABLE_VIDEO`                   | `true` / `true`           | Modalities loaded at boot                                                                 |
-| `ENGINE_BACKEND`                                                | `gpu`                     | `gpu` (Seed-VC + JoyAI) or `mock` (CPU testing)                                           |
-| `ENGINE_JWT_PUBLIC_KEY` / `ENGINE_JWT_JWKS_URL`                 | `None` / `None`           | Static SPKI Ed25519 PEM and/or `apps/api` JWKS URL                                        |
-| `ENGINE_JWT_JWKS_CACHE_TTL_S`                                   | `300`                     | JWKS key cache TTL in seconds                                                             |
-| `ENGINE_JWT_ISSUER` / `ENGINE_JWT_AUDIENCE`                     | `None` / `None`           | Expected JWT `iss` and `aud` claims                                                       |
-| `ENGINE_STARTUP_IDLE_TIMEOUT_S` / `ENGINE_DISCONNECT_TIMEOUT_S` | `120.0` / `30.0`          | Idle and disconnect shutdown timeouts                                                     |
-| `ENGINE_LIFECYCLE_WEBHOOK_URL` / `_SECRET`                      | `None`                    | Signed lifecycle webhook destination                                                      |
-| `ENGINE_INITIAL_PROMPT` / `_REF_IMAGE_URL` / `_REF_AUDIO_URL`   | `None`                    | Startup reference asset bootstrap                                                         |
-| `ENGINE_VIDEO_WIDTH` / `_HEIGHT` / `_FPS`                       | `840` / `480` / `24`      | Video streaming resolution and FPS                                                        |
-| `ENGINE_VOICE_SAMPLE_RATE` / `_VAD_BACKEND`                     | `22050` / `rms`           | Seed-VC sample rate and VAD mode (`rms` or `none`)                                        |
-| `ENGINE_VOICE_DIFFUSION_STEPS` / `_CFG_RATE`                    | `30` / `0.7`              | Seed-VC Euler ODE steps and classifier-free guidance rate                                 |
-| `ENGINE_VOICE_BLOCK_TIME_S` / `_CROSSFADE_S`                    | `0.40` / `0.08`           | Streaming chunk length and SOLA crossfade window                                          |
-| `ENGINE_VOICE_MAX_PROMPT_LENGTH_S` / `_DTYPE`                   | `15.0` / `auto`           | Max reference audio prompt duration and precision (`auto`/`float16`/`bfloat16`/`float32`) |
-| `ENGINE_AV_SYNC_ENABLED` / `_MAX_HOLD_S`                        | `true` / `1.0`            | Adaptive dual-modality A/V sync controls                                                  |
+| Variable                                                        | Default                   | Description                                                                                                                                                                                |
+| :-------------------------------------------------------------- | :------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ENGINE_HOST` / `ENGINE_PORT`                                   | `0.0.0.0` / `8000`        | Bind address and port                                                                                                                                                                      |
+| `ENGINE_INSTANCE_ID` / `ENGINE_USER_ID`                         | `local-instance` / `None` | Dedicated instance and user binding                                                                                                                                                        |
+| `ENGINE_ENABLE_VOICE` / `ENGINE_ENABLE_VIDEO`                   | `true` / `true`           | Modalities loaded at boot                                                                                                                                                                  |
+| `ENGINE_BACKEND`                                                | `gpu`                     | `gpu` (Seed-VC + JoyAI) or `mock` (CPU testing)                                                                                                                                            |
+| `ENGINE_JWT_PUBLIC_KEY` / `ENGINE_JWT_JWKS_URL`                 | `None` / `None`           | Static SPKI Ed25519 PEM and/or `apps/api` JWKS URL                                                                                                                                         |
+| `ENGINE_JWT_JWKS_CACHE_TTL_S`                                   | `300`                     | JWKS key cache TTL in seconds                                                                                                                                                              |
+| `ENGINE_JWT_ISSUER` / `ENGINE_JWT_AUDIENCE`                     | `None` / `None`           | Expected JWT `iss` and `aud` claims                                                                                                                                                        |
+| `ENGINE_STARTUP_IDLE_TIMEOUT_S` / `ENGINE_DISCONNECT_TIMEOUT_S` | `120.0` / `30.0`          | Idle and disconnect shutdown timeouts                                                                                                                                                      |
+| `ENGINE_LIFECYCLE_WEBHOOK_URL` / `_SECRET`                      | `None`                    | Signed lifecycle webhook destination                                                                                                                                                       |
+| `ENGINE_INITIAL_PROMPT` / `_REF_IMAGE_URL` / `_REF_AUDIO_URL`   | `None`                    | Startup reference asset bootstrap                                                                                                                                                          |
+| `ENGINE_VIDEO_WIDTH` / `_HEIGHT` / `_FPS`                       | `840` / `480` / `24`      | Video streaming resolution and FPS                                                                                                                                                         |
+| `ENGINE_VIDEO_COMPILE_MODE`                                     | `auto`                    | xVAE `torch.compile` mode (`auto`/`default`/`reduce-overhead`/`max-autotune-no-cudagraphs`/`none`); `auto` reuses `max-autotune-no-cudagraphs` only when seeded from cache, else `default` |
+| `ENGINE_VIDEO_WARMUP_BOTH_ORIENTATIONS`                         | `false`                   | When `false`, warms only the configured orientation instead of landscape + portrait                                                                                                        |
+| `ENGINE_VIDEO_SKIP_REF_IMAGE_COMPILE`                           | `true`                    | Runs one-shot reference-image VAE encode eager instead of compiling 49 bucket shapes                                                                                                       |
+| `ENGINE_VIDEO_PERSIST_COMPILE_CACHE`                            | `true`                    | Asynchronously saves local `/tmp` compile cache back to `<volume>/cache/<gpu_slug>.tar.zst`                                                                                                |
+| `ENGINE_VOICE_SAMPLE_RATE` / `_VAD_BACKEND`                     | `22050` / `rms`           | Seed-VC sample rate and VAD mode (`rms` or `none`)                                                                                                                                         |
+| `ENGINE_VOICE_DIFFUSION_STEPS` / `_WARMUP_DIFFUSION_STEPS`      | `30` / `2`                | Seed-VC live Euler ODE steps and fast startup warmup steps                                                                                                                                 |
+| `ENGINE_VOICE_PARALLEL_LOAD` / `_CFG_RATE`                      | `true` / `0.7`            | Concurrent CPU checkpoint loading and classifier-free guidance rate                                                                                                                        |
+| `ENGINE_VOICE_BLOCK_TIME_S` / `_CROSSFADE_S`                    | `0.40` / `0.08`           | Streaming chunk length and SOLA crossfade window                                                                                                                                           |
+| `ENGINE_VOICE_MAX_PROMPT_LENGTH_S` / `_DTYPE`                   | `15.0` / `auto`           | Max reference audio prompt duration and precision (`auto`/`float16`/`bfloat16`/`float32`)                                                                                                  |
+| `ENGINE_AV_SYNC_ENABLED` / `_MAX_HOLD_S`                        | `true` / `1.0`            | Adaptive dual-modality A/V sync controls                                                                                                                                                   |
 
 ## Commands
 

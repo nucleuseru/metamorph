@@ -876,9 +876,9 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
     pipe = SeedVCVoicePipeline(settings)
     pipe.warmup()
 
-    # Warmup must run cfm.inference + HiFT outside autocast with fp32 mel, then clear ref audio
+    # Warmup runs fast 2-step cfm.inference + HiFT outside autocast with fp32 mel, then clears ref
     assert state["cfm_calls"] == 1
-    assert state["diffusion_steps"] == [30]
+    assert state["diffusion_steps"] == [2]
     assert state["cfg_rates"] == [0.7]
     assert state["hift_autocast_depths"] == [0]
     assert state["hift_dtypes"] == [np.float32]
@@ -903,7 +903,7 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
     assert bool(silent_outs[0].flags & FrameFlags.SILENCE) is True
     assert state["cfm_calls"] == 1
 
-    # Voiced chunk -> runs infer_window + HiFT outside autocast
+    # Voiced chunk -> runs infer_window with full 30 steps + HiFT outside autocast
     voiced = (0.2 * np.sin(2.0 * np.pi * 220.0 * np.arange(8820) / 22050.0)).astype(np.float32)
     voiced_outs = sess.push_audio(
         AudioChunkIn(
@@ -917,7 +917,7 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
     assert len(voiced_outs) == 1
     assert bool(voiced_outs[0].flags & FrameFlags.SPEECH_ACTIVE) is True
     assert state["cfm_calls"] == 2
-    assert state["diffusion_steps"] == [30, 30]
+    assert state["diffusion_steps"] == [2, 30]
     assert state["hift_autocast_depths"] == [0, 0]
     assert state["hift_dtypes"] == [np.float32, np.float32]
 
@@ -1012,9 +1012,11 @@ def test_prepare_reference_audio_trims_silence_removes_dc_and_normalizes() -> No
 
 
 def test_voice_engine_defaults_favor_high_clarity() -> None:
-    """Verify maxed-out default Seed-VC parameters stay internally consistent."""
+    """Verify maxed-out default Seed-VC & fast startup parameters stay internally consistent."""
     settings = EngineSettings()
     assert settings.voice_diffusion_steps == 30
+    assert settings.voice_warmup_diffusion_steps == 2
+    assert settings.voice_parallel_load is True
     assert settings.voice_cfg_rate == 0.7
     assert settings.voice_max_prompt_length_s == 15.0
     assert settings.voice_extra_context_left_s == 5.0
@@ -1024,6 +1026,10 @@ def test_voice_engine_defaults_favor_high_clarity() -> None:
     assert settings.voice_block_time_s == 0.40
     assert settings.voice_vad_hangover_s == 0.5
     assert settings.voice_vad_threshold_db == -48.0
+    assert settings.video_compile_mode == "auto"
+    assert settings.video_warmup_both_orientations is False
+    assert settings.video_skip_ref_image_compile is True
+    assert settings.video_persist_compile_cache is True
 
     session_cfg = AudioSessionConfig()
     assert session_cfg.diffusion_steps == settings.voice_diffusion_steps
@@ -1056,3 +1062,263 @@ def test_joyai_detects_fuse_mount_and_disables_mmap_safely(
     assert _should_disable_dit_mmap("/models/checkpoints/dit.pth", "false") is False
     assert _should_disable_dit_mmap("/tmp/dit.pth", "true") is True
     assert _should_disable_dit_mmap("/tmp/dit.pth", "auto") is False
+
+
+def test_seedvc_load_xlsr_short_circuits_local_and_prefers_pruned_fp16(tmp_path: Path) -> None:
+    """Local XLSR directories must bypass HuggingFace snapshot_download and prefer pruned fp16."""
+    from metamorph_engine.pipelines.voice_seedvc import _load_xlsr_model
+
+    cache_dir = tmp_path / "seedvc"
+    raw_dir = cache_dir / "facebook__wav2vec2-xls-r-300m"
+    pruned_dir = cache_dir / "facebook__wav2vec2-xls-r-300m-l12-fp16"
+    for d in (raw_dir, pruned_dir):
+        d.mkdir(parents=True)
+        (d / "config.json").write_text("{}", encoding="utf-8")
+        (d / "model.safetensors").write_bytes(b"weights")
+
+    snapshot_calls: list[dict[str, Any]] = []
+    feat_calls: list[tuple[str, dict[str, Any]]] = []
+    model_calls: list[tuple[str, dict[str, Any]]] = []
+
+    fake_hf = _make_module(
+        "huggingface_hub",
+        snapshot_download=lambda **kw: snapshot_calls.append(kw),
+    )
+    fake_tf = _make_module(
+        "transformers",
+        Wav2Vec2FeatureExtractor=types.SimpleNamespace(
+            from_pretrained=lambda src, **kw: (feat_calls.append((src, kw)), "feat")[1]
+        ),
+        Wav2Vec2Model=types.SimpleNamespace(
+            from_pretrained=lambda src, **kw: (model_calls.append((src, kw)), "w2v")[1]
+        ),
+    )
+
+    feat, w2v = _load_xlsr_model(
+        fake_tf,
+        fake_hf,
+        model_name="facebook/wav2vec2-xls-r-300m",
+        cache_dir=str(cache_dir),
+        output_layer=12,
+        torch_dtype="fp16_sentinel",
+    )
+    assert (feat, w2v) == ("feat", "w2v")
+    assert snapshot_calls == []
+    assert feat_calls == [(str(pruned_dir), {"local_files_only": True})]
+    assert model_calls == [
+        (str(pruned_dir), {"local_files_only": True, "torch_dtype": "fp16_sentinel"})
+    ]
+
+
+def test_joyai_compile_mode_resolution_and_cache_archive_persistence(tmp_path: Path) -> None:
+    """Auto compile mode avoids cold max-autotune, reuses seeded mode, and never downgrades."""
+    from metamorph_engine.pipelines.video_joyai import (
+        _CACHE_MODE_MARKER,
+        _persist_compile_cache_archive,
+        _resolve_video_compile_mode,
+    )
+
+    local_cache = tmp_path / "local_cache"
+    inductor_dir = local_cache / "torchinductor"
+    inductor_dir.mkdir(parents=True)
+
+    # Cold empty cache -> fast default mode
+    assert _resolve_video_compile_mode("auto", cache_root=local_cache) == "default"
+    assert _resolve_video_compile_mode("none", cache_root=local_cache) == "none"
+
+    # Seeded max-autotune cache -> reuses max-autotune-no-cudagraphs
+    (inductor_dir / "kernel.bin").write_bytes(b"compiled")
+    (local_cache / _CACHE_MODE_MARKER).write_text("max-autotune-no-cudagraphs\n", encoding="utf-8")
+    assert (
+        _resolve_video_compile_mode("auto", cache_root=local_cache) == "max-autotune-no-cudagraphs"
+    )
+
+    # Persist archive to persistent volume
+    vol_cache = tmp_path / "volume" / "cache" / "nvidia_rtx_5090"
+    archive = _persist_compile_cache_archive(
+        local_cache_root=local_cache,
+        volume_cache_root=vol_cache,
+        compile_mode="default",
+    )
+    assert archive is not None and archive.is_file()
+    assert Path(f"{vol_cache}.compile_mode").read_text(encoding="utf-8").strip() == "default"
+
+    # Upgrading default -> max-autotune-no-cudagraphs succeeds
+    upgraded = _persist_compile_cache_archive(
+        local_cache_root=local_cache,
+        volume_cache_root=vol_cache,
+        compile_mode="max-autotune-no-cudagraphs",
+    )
+    assert upgraded is not None and upgraded.is_file()
+    assert (
+        Path(f"{vol_cache}.compile_mode").read_text(encoding="utf-8").strip()
+        == "max-autotune-no-cudagraphs"
+    )
+
+    # Downgrading max-autotune-no-cudagraphs -> default is skipped
+    downgrade = _persist_compile_cache_archive(
+        local_cache_root=local_cache,
+        volume_cache_root=vol_cache,
+        compile_mode="default",
+    )
+    assert downgrade is None
+
+
+def test_joyai_hooks_single_orientation_skip_ref_compile_and_eager_ref_encode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify compile hooks skip 49-shape dynamic warmup, portrait orientation, and double-wrap."""
+    from metamorph_engine.pipelines.video_joyai import _patch_joyai_compile_and_warmup
+
+    compile_calls: list[dict[str, Any]] = []
+    decode_warmups: list[tuple[int, int]] = []
+    encode_warmups: list[tuple[int, int]] = []
+    dynamic_warmups: list[Any] = []
+    full_warmups: list[tuple[int, int]] = []
+    eager_encode_calls: list[str] = []
+
+    class _FakeWeightData:
+        def __init__(self) -> None:
+            self.formats: list[Any] = []
+
+        def to(self, **kw: Any) -> _FakeWeightData:
+            self.formats.append(kw.get("memory_format"))
+            return self
+
+    class _FakeConv3d:
+        def __init__(self) -> None:
+            self.weight = types.SimpleNamespace(data=_FakeWeightData())
+
+    class _FakeVAE:
+        def __init__(self) -> None:
+            self._conv = _FakeConv3d()
+
+        def modules(self) -> list[Any]:
+            return [self._conv]
+
+        def _encode(self, x: Any) -> str:
+            eager_encode_calls.append(f"eager:{x}")
+            return f"lat:{x}"
+
+        def _decode(self, z: Any) -> str:
+            return f"dec:{z}"
+
+    def _fake_compile(fn: Any, *, mode: str, dynamic: bool) -> Any:
+        compile_calls.append({"fn": fn, "mode": mode, "dynamic": dynamic})
+
+        def _compiled(x: Any) -> str:
+            return f"compiled({mode},{dynamic}):{x}"
+
+        return _compiled
+
+    fake_torch = _make_module(
+        "torch",
+        nn=types.SimpleNamespace(Conv3d=_FakeConv3d),
+        channels_last_3d="channels_last_3d",
+        compile=_fake_compile,
+    )
+    fake_vae_mod = _make_module(
+        "xvideo.models.vae.vae",
+        DiagonalGaussianDistribution=lambda h: ("dist", h),
+        EncoderOutput=lambda latent_dist: types.SimpleNamespace(latent_dist=latent_dist),
+    )
+    fake_vc = _make_module(
+        "xvideo.models.vae.vae_compile",
+        _configured=set(),
+        _configured_encode=set(),
+        _configured_encode_dynamic=set(),
+        prep_input=lambda x: f"prep({x})",
+        maybe_setup_decode=lambda vae: None,
+        maybe_setup_encode=lambda vae: None,
+        maybe_setup_encode_dynamic=lambda vae: None,
+        encode_via_dynamic=lambda vae, x: "orig_dyn",
+        warmup_decode=lambda vae, c, h, w, *a, **kw: decode_warmups.append((h, w)),
+        warmup_encode=lambda vae, c, h, w, *a, **kw: encode_warmups.append((h, w)),
+        warmup_encode_dynamic=lambda vae, c, hw, *a, **kw: dynamic_warmups.append(hw),
+    )
+
+    class _FakeRuntime:
+        def warmup_full_pipeline(self, *, height: int = 720, width: int = 1248, **kw: Any) -> None:
+            full_warmups.append((height, width))
+
+    fake_streaming = _make_module("xvideo.serving.joyomni_streaming", JoyOmniRuntime=_FakeRuntime)
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "xvideo.models.vae.vae", fake_vae_mod)
+    monkeypatch.setitem(sys.modules, "xvideo.models.vae.vae_compile", fake_vc)
+
+    vae = _FakeVAE()
+    rt = _FakeRuntime()
+
+    with _patch_joyai_compile_and_warmup(
+        streaming_mod=fake_streaming,
+        compile_mode="default",
+        warmup_height=480,
+        warmup_width=840,
+        warmup_both_orientations=False,
+        skip_ref_image_compile=True,
+    ):
+        fake_vc.maybe_setup_decode(vae)
+        fake_vc.maybe_setup_encode(vae)
+        fake_vc.maybe_setup_encode_dynamic(vae)
+
+        # Simulate upstream dual-orientation warmup loop
+        for wh, ww in ((480, 840), (840, 480)):
+            fake_vc.warmup_decode(vae, 16, wh // 16, ww // 16)
+            fake_vc.warmup_encode(vae, 3, wh, ww)
+            rt.warmup_full_pipeline(height=wh, width=ww)
+
+        fake_vc.warmup_encode_dynamic(vae, 3, [(384, 1344)] * 49)
+
+    # Compile mode must be "default" (only decode + encode, NEVER dynamic)
+    assert len(compile_calls) == 2
+    assert all(c["mode"] == "default" and c["dynamic"] is False for c in compile_calls)
+
+    # Only landscape orientation ran; portrait orientation was skipped everywhere
+    assert decode_warmups == [(30, 52)]
+    assert encode_warmups == [(480, 840)]
+    assert full_warmups == [(480, 840)]
+    assert dynamic_warmups == []
+
+    # Reference-image encode must run eager on the saved uncompiled _encode
+    out = fake_vc.encode_via_dynamic(vae, "ref_img")
+    assert eager_encode_calls == ["eager:prep(ref_img)"]
+    assert out.latent_dist == ("dist", "lat:prep(ref_img)")
+
+
+def test_joyai_fuse_safetensors_loader_disables_mmap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify FUSE safetensors patch injects disable_mmap=True and bypasses load_file mmap."""
+    from metamorph_engine.pipelines.video_joyai import _patch_fuse_safetensors_loaders
+
+    seen_qwen_kwargs: list[dict[str, Any]] = []
+    seen_bytes_loads: list[bytes] = []
+
+    class _FakeQwen:
+        @staticmethod
+        def from_pretrained(path: str, **kwargs: Any) -> str:
+            seen_qwen_kwargs.append({"path": path, **kwargs})
+            return "qwen_model"
+
+    fake_tf = _make_module("transformers", Qwen2_5_VLForConditionalGeneration=_FakeQwen)
+    fake_st_torch = _make_module(
+        "safetensors.torch",
+        load_file=lambda filename, device="cpu": {"via": "mmap"},
+        load=lambda raw: (seen_bytes_loads.append(raw), {"via": "bytes"})[1],
+    )
+    monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+    monkeypatch.setitem(sys.modules, "safetensors.torch", fake_st_torch)
+
+    st_file = tmp_path / "vae.safetensors"
+    st_file.write_bytes(b"safetensor-bytes")
+
+    with _patch_fuse_safetensors_loaders(disable_mmap=True, mmap_setting="true"):
+        assert _FakeQwen.from_pretrained("/models/mimo") == "qwen_model"
+        assert fake_st_torch.load_file(str(st_file), device="cpu") == {"via": "bytes"}
+
+    assert seen_qwen_kwargs == [{"path": "/models/mimo", "disable_mmap": True}]
+    assert seen_bytes_loads == [b"safetensor-bytes"]
+    # Originals restored on context exit
+    assert fake_st_torch.load_file(str(st_file), device="cpu") == {"via": "mmap"}
