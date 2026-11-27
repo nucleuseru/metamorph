@@ -47,9 +47,8 @@ describe("GPU providers & failover", () => {
           JSON.stringify({
             id: "pod-4090-1",
             name: "metamorph-inst-1",
-            desiredStatus: "RUNNING",
-            runtimeStatus: "initializing",
-            costPerHr: 0.69,
+            status: "PROVISIONING",
+            cost: 0.69,
             gpu: { id: parsed.gpu?.id, count: 1 },
           }),
           { status: 201, headers: { "content-type": "application/json" } },
@@ -61,8 +60,7 @@ describe("GPU providers & failover", () => {
           JSON.stringify({
             id: "pod-4090-1",
             name: "metamorph-inst-1",
-            desiredStatus: "RUNNING",
-            runtimeStatus: "running",
+            status: "RUNNING",
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -70,19 +68,21 @@ describe("GPU providers & failover", () => {
 
       if (method === "GET" && url.endsWith("/pods")) {
         return new Response(
-          JSON.stringify([
-            {
-              id: "pod-4090-1",
-              name: "metamorph-inst-1",
-              runtimeStatus: "running",
-              createdAt: "2026-11-24T10:00:00.000Z",
-            },
-            {
-              id: "unrelated-pod",
-              name: "other-workload",
-              runtimeStatus: "running",
-            },
-          ]),
+          JSON.stringify({
+            pods: [
+              {
+                id: "pod-4090-1",
+                name: "metamorph-inst-1",
+                status: "RUNNING",
+                createdAt: "2026-11-24T10:00:00.000Z",
+              },
+              {
+                id: "unrelated-pod",
+                name: "other-workload",
+                status: "RUNNING",
+              },
+            ],
+          }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
@@ -100,6 +100,7 @@ describe("GPU providers & failover", () => {
           apiKey: "rp_test",
           cloud: "SECURE",
           dataCenterIds: ["US-GA-1"],
+          networkVolumeId: "vol_123",
         });
         const hw = resolveHardwareProfile({
           modalities: ["voice"],
@@ -119,6 +120,7 @@ describe("GPU providers & failover", () => {
         assert.equal(provisioned.provider, "runpod");
         assert.equal(provisioned.providerInstanceId, "pod-4090-1");
         assert.equal(provisioned.gpuType, "NVIDIA GeForce RTX 4090");
+        assert.equal(provisioned.hourlyRateUsd, 0.69);
         assert.equal(provisioned.httpUrl, "https://pod-4090-1-8000.proxy.runpod.net");
         assert.equal(provisioned.wsUrl, "wss://pod-4090-1-8000.proxy.runpod.net/ws/session");
         assert.equal(provisioned.tlsSupported, true);
@@ -126,10 +128,16 @@ describe("GPU providers & failover", () => {
         const secondReq = requests[1]!.body as {
           cloud?: string;
           dataCenterIds?: string[];
+          networkVolumes?: unknown;
+          mounts?: { network?: Array<{ volumeId: string; path: string }> };
           gpu?: { minCudaVersion?: string };
         };
         assert.equal(secondReq.cloud, "SECURE");
         assert.deepEqual(secondReq.dataCenterIds, ["US-GA-1"]);
+        assert.equal(secondReq.networkVolumes, undefined);
+        assert.deepEqual(secondReq.mounts, {
+          network: [{ volumeId: "vol_123", path: "/models" }],
+        });
         assert.equal(secondReq.gpu?.minCudaVersion, "12.8");
 
         const status = yield* runpod.getStatus("pod-4090-1");

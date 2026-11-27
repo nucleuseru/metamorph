@@ -26,9 +26,11 @@ const RunPodGpuInfo = Schema.Struct({
 const RunPodPod = Schema.Struct({
   id: Schema.String,
   name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  status: Schema.optionalKey(Schema.NullOr(Schema.String)),
   desiredStatus: Schema.optionalKey(Schema.NullOr(Schema.String)),
   runtimeStatus: Schema.optionalKey(Schema.NullOr(Schema.String)),
   runtimeStatusReason: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  cost: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   costPerHr: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   createdAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   gpu: Schema.optionalKey(Schema.NullOr(RunPodGpuInfo)),
@@ -50,6 +52,13 @@ const mapRunPodStatus = (pod: typeof RunPodPod.Type): ProviderInstanceStatus["st
   if (rt === "initializing") return "provisioning";
   if (rt === "stopped") return "stopped";
   if (rt === "terminated") return "terminated";
+
+  const v2 = pod.status?.toUpperCase();
+  if (v2 === "RUNNING") return "running";
+  if (v2 === "PROVISIONING" || v2 === "STARTING") return "provisioning";
+  if (v2 === "EXITED") return "stopped";
+  if (v2 === "ERROR") return "failed";
+  if (v2 === "TERMINATED") return "terminated";
 
   const desired = pod.desiredStatus?.toUpperCase();
   if (desired === "TERMINATED") return "terminated";
@@ -114,7 +123,14 @@ export const makeRunPodProvider = Effect.fn("makeRunPodProvider")(function* (con
         body["dataCenterIds"] = [...config.dataCenterIds];
       }
       if (config.networkVolumeId) {
-        body["networkVolumes"] = [config.networkVolumeId];
+        body["mounts"] = {
+          network: [
+            {
+              volumeId: config.networkVolumeId,
+              path: request.env["MODEL_VOLUME_DIR"] ?? "/models",
+            },
+          ],
+        };
       }
 
       const response = yield* HttpClientRequest.post("/pods").pipe(
@@ -188,7 +204,7 @@ export const makeRunPodProvider = Effect.fn("makeRunPodProvider")(function* (con
         provider: "runpod",
         providerInstanceId: pod.id,
         gpuType: pod.gpu?.id ?? gpuId,
-        hourlyRateUsd: pod.costPerHr ?? null,
+        hourlyRateUsd: pod.cost ?? pod.costPerHr ?? null,
         httpUrl: urls.httpUrl,
         wsUrl: urls.wsUrl,
         tlsSupported: true,

@@ -146,6 +146,18 @@ export function formatFriendlyError(
   }
 
   if (
+    lower.includes("provider") ||
+    lower.includes("gpu") ||
+    lower.includes("runpod") ||
+    lower.includes("vast") ||
+    lower.includes("orchestrator") ||
+    lower.includes("override") ||
+    lower.includes("capacity")
+  ) {
+    return "Something went wrong starting your studio. Please try again in a moment.";
+  }
+
+  if (
     status === 503 ||
     lower.includes("503") ||
     lower.includes("not ready") ||
@@ -180,12 +192,6 @@ export function formatFriendlyError(
   if (
     status === 500 ||
     status === 502 ||
-    lower.includes("provider") ||
-    lower.includes("gpu") ||
-    lower.includes("runpod") ||
-    lower.includes("vast") ||
-    lower.includes("orchestrator") ||
-    lower.includes("override") ||
     lower.includes("502") ||
     lower.includes("500") ||
     lower.includes("bad gateway")
