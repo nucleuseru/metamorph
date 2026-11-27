@@ -117,6 +117,28 @@ def decode_pcm_bytes(payload: bytes | memoryview, codec: AudioCodec) -> np.ndarr
     return np.clip(arr, -1.0, 1.0)
 
 
+def soft_limit_audio(
+    samples: np.ndarray,
+    *,
+    threshold: float = 0.9,
+    ceiling: float = 0.98,
+) -> np.ndarray:
+    """Apply a transparent soft-knee peak limiter above `threshold` to prevent hard clipping."""
+    arr = np.asarray(samples, dtype=np.float32)
+    if arr.size == 0 or ceiling <= threshold:
+        return arr
+    mag = np.abs(arr)
+    if not np.any(mag > threshold):
+        return arr
+    headroom = ceiling - threshold
+    limited_mag = np.where(
+        mag > threshold,
+        threshold + headroom * np.tanh((mag - threshold) / headroom),
+        mag,
+    )
+    return (np.sign(arr) * limited_mag).astype(np.float32, copy=False)
+
+
 def encode_pcm_bytes(samples: np.ndarray, codec: AudioCodec) -> bytes:
     """Serialize mono float32 samples into PCM16 LE wire bytes."""
     if codec != AudioCodec.PCM_S16LE:
