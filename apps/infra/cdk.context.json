@@ -1,0 +1,8 @@
+{
+  "availability-zones:account=781504636052:region=eu-north-1": [
+    "eu-north-1a",
+    "eu-north-1b",
+    "eu-north-1c"
+  ],
+  "ssm:account=781504636052:parameterName=/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-arm64:region=eu-north-1": "ami-0d7960a3351f9f8d0"
+}

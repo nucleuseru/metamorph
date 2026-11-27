@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --noEmit",
     "watch": "tsc -w",
-    "test": "jest",
-    "cdk": "cdk"
+    "typecheck": "tsc --noEmit",
+    "test": "jest --watchman=false",
+    "cdk": "NODE_OPTIONS='-r dotenv/config' cdk"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.275.0",
@@ -18,6 +19,7 @@
     "@types/jest": "^30",
     "@types/node": "^24.10.1",
     "aws-cdk": "2.1148.1",
+    "dotenv": "^18.0.10",
     "jest": "^30",
     "tsx": "^4.23.0",
     "typescript": "~7.0.2"
