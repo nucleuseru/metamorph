@@ -83,6 +83,8 @@ class EngineSettings(BaseSettings):
     voice_extra_dit_context_left_s: float = Field(default=2.5, ge=0.05, le=10.0)
     voice_extra_context_right_s: float = Field(default=0.16, ge=0.0, le=2.0)
     voice_diffusion_steps: int = Field(default=30, ge=1, le=50)
+    voice_warmup_diffusion_steps: int = Field(default=2, ge=1, le=50)
+    voice_parallel_load: bool = True
     voice_cfg_rate: float = Field(default=0.7, ge=0.0, le=2.0)
     voice_max_prompt_length_s: float = Field(default=15.0, ge=0.5, le=30.0)
     voice_dtype: Literal["auto", "float16", "bfloat16", "float32"] = "auto"
@@ -110,6 +112,16 @@ class EngineSettings(BaseSettings):
     video_vae_ckpt: str | None = None
     video_text_encoder_ckpt: str | None = None
     video_disable_mmap: Literal["auto", "true", "false"] = "auto"
+    video_compile_mode: Literal[
+        "auto",
+        "default",
+        "reduce-overhead",
+        "max-autotune-no-cudagraphs",
+        "none",
+    ] = "auto"
+    video_warmup_both_orientations: bool = False
+    video_skip_ref_image_compile: bool = True
+    video_persist_compile_cache: bool = True
     video_session_close_timeout_s: float = Field(default=5.0, gt=0.0)
 
     # A/V Synchronization

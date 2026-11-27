@@ -29,6 +29,7 @@ describe("Hardware sizing and engine env generation", () => {
     assert.equal(videoStd.minVramGb, 32);
     assert.equal(videoStd.videoWidth, 840);
     assert.equal(videoStd.videoHeight, 480);
+    assert.ok(!videoStd.runpodGpuIds.includes("NVIDIA A100 80GB PCIe"));
 
     const videoHigh = resolveHardwareProfile({
       modalities: ["video"],
@@ -38,6 +39,7 @@ describe("Hardware sizing and engine env generation", () => {
     assert.equal(videoHigh.minVramGb, 48);
     assert.equal(videoHigh.videoWidth, 1248);
     assert.equal(videoHigh.videoHeight, 720);
+    assert.ok(!videoHigh.runpodGpuIds.includes("NVIDIA A100 80GB PCIe"));
 
     const dualStd = resolveHardwareProfile({
       modalities: ["voice", "video"],
@@ -48,6 +50,7 @@ describe("Hardware sizing and engine env generation", () => {
     assert.equal(dualStd.minVramGb, 48);
     assert.equal(dualStd.enableVoice, true);
     assert.equal(dualStd.enableVideo, true);
+    assert.ok(!dualStd.runpodGpuIds.includes("NVIDIA A100 80GB PCIe"));
   });
 
   test("escapes PEM newlines and populates required ENGINE_* environment variables", () => {
@@ -80,6 +83,7 @@ describe("Hardware sizing and engine env generation", () => {
         jwtIssuer: "https://api.example.com",
         jwtJwksUrl: "https://api.example.com/.well-known/engine-jwks.json",
         autoDownloadModels: true,
+        videoCompileMode: "default",
       },
       idleTimeoutS: 120,
       disconnectTimeoutS: 30,
@@ -95,8 +99,25 @@ describe("Hardware sizing and engine env generation", () => {
     assert.equal(env["ENGINE_ENABLE_VIDEO"], "true");
     assert.equal(env["ENGINE_VIDEO_WIDTH"], "1248");
     assert.equal(env["ENGINE_VIDEO_HEIGHT"], "720");
+    assert.equal(env["ENGINE_VIDEO_COMPILE_MODE"], "default");
     assert.equal(env["ENGINE_LIFECYCLE_WEBHOOK_SECRET"], "sec-789");
     assert.equal(env["ENGINE_INITIAL_PROMPT"], "cyberpunk neon jacket");
     assert.equal(env["AUTO_DOWNLOAD_MODELS"], "true");
+
+    const voiceOnlyHw = resolveHardwareProfile({
+      modalities: ["voice"],
+      quality: "standard",
+      config: defaultOrchestratorConfig,
+    });
+    const voiceEnv = buildEngineEnv({
+      instanceId: "inst-voice",
+      userId: "user-456",
+      hardware: voiceOnlyHw,
+      jwtPublicKeyPem: pem,
+      config: { ...defaultOrchestratorConfig, videoCompileMode: "default" },
+      idleTimeoutS: 120,
+      disconnectTimeoutS: 30,
+    });
+    assert.equal(voiceEnv["ENGINE_VIDEO_COMPILE_MODE"], undefined);
   });
 });

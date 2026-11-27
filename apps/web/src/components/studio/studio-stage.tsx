@@ -134,6 +134,34 @@ function getCoachingMessage(
   return null;
 }
 
+function getSessionReadyMessage(
+  hasVideo: boolean,
+  hasVoice: boolean,
+): { title: string; subtitle: string } {
+  if (hasVideo && hasVoice) {
+    return {
+      title: "Getting your studio ready...",
+      subtitle: "Preparing your live look and voice. This usually takes a moment the first time.",
+    };
+  }
+  if (hasVideo) {
+    return {
+      title: "Getting your look ready...",
+      subtitle: "Preparing your live look. This usually takes a moment the first time.",
+    };
+  }
+  if (hasVoice) {
+    return {
+      title: "Getting your voice ready...",
+      subtitle: "Preparing your live voice. This usually takes a moment the first time.",
+    };
+  }
+  return {
+    title: "Getting your studio ready...",
+    subtitle: "Preparing your live session. This usually takes a moment the first time.",
+  };
+}
+
 export function StudioStage({
   localVideoRef,
   outputCanvasRef,
@@ -211,6 +239,7 @@ export function StudioStage({
       streamPhase === "starting");
 
   const coaching = isStreaming ? getCoachingMessage(videoActivity, videoActivityReason) : null;
+  const sessionReadyMessage = getSessionReadyMessage(hasVideo, hasVoice);
 
   const countdownWarningS =
     engineStatus?.disconnect_countdown_s !== null &&
@@ -382,9 +411,9 @@ export function StudioStage({
         {isProvisioningOrWarming && activeSession && !isCleanView ? (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-background/95 px-6 text-center backdrop-blur-md">
             <Spinner className="size-7 text-primary" />
-            <h2 className="text-xl font-semibold text-foreground">Getting your studio ready...</h2>
+            <h2 className="text-xl font-semibold text-foreground">{sessionReadyMessage.title}</h2>
             <p className="max-w-sm text-sm font-medium text-muted-foreground">
-              Preparing your live look and voice. This usually takes a moment the first time.
+              {sessionReadyMessage.subtitle}
             </p>
           </div>
         ) : null}

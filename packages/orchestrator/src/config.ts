@@ -19,6 +19,7 @@ export interface OrchestratorConfigShape {
   readonly allowedAssetHosts: string | undefined;
   readonly autoDownloadModels: boolean;
   readonly modelVolumeDir: string | undefined;
+  readonly videoCompileMode: string | undefined;
   readonly voiceGpuIds: ReadonlyArray<string> | undefined;
   readonly videoStandardGpuIds: ReadonlyArray<string> | undefined;
   readonly videoHighGpuIds: ReadonlyArray<string> | undefined;
@@ -60,6 +61,7 @@ export const defaultOrchestratorConfig: OrchestratorConfigShape = {
   allowedAssetHosts: undefined,
   autoDownloadModels: false,
   modelVolumeDir: undefined,
+  videoCompileMode: undefined,
   voiceGpuIds: undefined,
   videoStandardGpuIds: undefined,
   videoHighGpuIds: undefined,
@@ -131,6 +133,7 @@ export class OrchestratorConfig extends Context.Service<
         Config.withDefault(defaultOrchestratorConfig.autoDownloadModels),
       );
       const modelVolumeDirOpt = yield* Config.option(Config.String("ENGINE_MODEL_VOLUME_DIR"));
+      const videoCompileModeOpt = yield* Config.option(Config.String("ENGINE_VIDEO_COMPILE_MODE"));
       const voiceGpuIdsOpt = yield* Config.option(Config.String("ORCHESTRATOR_VOICE_GPU_IDS"));
       const videoStandardGpuIdsOpt = yield* Config.option(
         Config.String("ORCHESTRATOR_VIDEO_STANDARD_GPU_IDS"),
@@ -166,6 +169,7 @@ export class OrchestratorConfig extends Context.Service<
         allowedAssetHosts: cleanOpt(allowedAssetHostsOpt),
         autoDownloadModels,
         modelVolumeDir: cleanOpt(modelVolumeDirOpt),
+        videoCompileMode: cleanOpt(videoCompileModeOpt),
         voiceGpuIds: parseCsvOption(voiceGpuIdsOpt),
         videoStandardGpuIds: parseCsvOption(videoStandardGpuIdsOpt),
         videoHighGpuIds: parseCsvOption(videoHighGpuIdsOpt),
