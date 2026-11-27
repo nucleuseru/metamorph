@@ -61,7 +61,7 @@ def create_app(
                     return
                 except Exception as exc:
                     logger.exception("Async startup warmup failed: %s", exc)
-                    await lifecycle.mark_startup_failed(str(exc))
+                    await lifecycle.mark_startup_failed(str(exc) or type(exc).__name__)
 
             startup_task = asyncio.create_task(_run_async_boot(), name="engine-startup-warmup")
         else:
