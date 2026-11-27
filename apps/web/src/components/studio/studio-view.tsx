@@ -603,7 +603,7 @@ export function StudioView() {
     try {
       await updateConfigMutation.mutateAsync({
         id: activeSession.id,
-        body: { prompt: nextPrompt || null },
+        body: { prompt: nextPrompt },
       });
       setAppliedPrompt(nextPrompt);
     } catch (err) {

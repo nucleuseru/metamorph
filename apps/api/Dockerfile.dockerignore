@@ -23,8 +23,12 @@ build
 
 # Workspaces and assets not needed for @metamorph/api
 apps/web
+apps/infra
 apps/engine-py
 packages/shared-py
+pyproject.toml
+uv.lock
+.python-version
 vendor
 docs
 **/.agents

@@ -26,25 +26,27 @@ const cleanOption = (opt: Option.Option<string>): string | undefined => {
 };
 
 /**
- * Wraps `OrchestratorConfig.layer` so `webhookBaseUrl` defaults to `API_PUBLIC_URL`
- * or `BETTER_AUTH_URL` when `ORCHESTRATOR_WEBHOOK_BASE_URL` is unset.
+ * Wraps `OrchestratorConfig.layer` so `webhookBaseUrl`, `jwtJwksUrl`, and `jwtIssuer`
+ * default from `API_PUBLIC_URL` / `BETTER_AUTH_URL` when unset.
  */
 const AppOrchestratorConfigLayer = Layer.effect(
   OrchestratorConfig,
   Effect.gen(function* () {
     const base = yield* OrchestratorConfig;
-    if (base.webhookBaseUrl) {
-      return base;
-    }
-    const apiPublicUrlOpt = yield* Config.option(Config.String("API_PUBLIC_URL"));
-    const betterAuthUrlOpt = yield* Config.option(Config.String("BETTER_AUTH_URL"));
-    const fallback = (cleanOption(apiPublicUrlOpt) ?? cleanOption(betterAuthUrlOpt))?.replace(
-      /\/+$/,
-      "",
-    );
+    const apiPublicUrl = cleanOption(
+      yield* Config.option(Config.String("API_PUBLIC_URL")),
+    )?.replace(/\/+$/, "");
+    const betterAuthUrl = cleanOption(
+      yield* Config.option(Config.String("BETTER_AUTH_URL")),
+    )?.replace(/\/+$/, "");
+    const fallback = apiPublicUrl ?? betterAuthUrl;
+
     return OrchestratorConfig.of({
       ...base,
-      webhookBaseUrl: fallback,
+      webhookBaseUrl: base.webhookBaseUrl ?? fallback,
+      jwtJwksUrl:
+        base.jwtJwksUrl ?? (fallback ? `${fallback}/.well-known/engine-jwks.json` : undefined),
+      jwtIssuer: base.jwtIssuer ?? betterAuthUrl ?? fallback,
     });
   }),
 ).pipe(Layer.provide(OrchestratorConfig.layer));

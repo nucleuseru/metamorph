@@ -29,7 +29,8 @@ export const makeLocalProvider = Effect.fn("makeLocalProvider")(function* (
 ) {
   const httpUrl = (config.httpUrl ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
   const wsUrl = config.wsUrl ?? deriveWsUrl(httpUrl);
-  const tlsSupported = config.tlsSupported ?? true;
+  const tlsSupported =
+    config.tlsSupported ?? (httpUrl.startsWith("https://") || wsUrl.startsWith("wss://"));
   const gpuType = config.gpuType ?? "local-dev";
   const client = yield* HttpClient.HttpClient;
 

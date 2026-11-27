@@ -54,14 +54,15 @@ Single multiplexed WebSocket connection carrying both JSON control messages and 
 
 ## JWT Claims Contract (`apps/api` -> `apps/engine-py`)
 
-Tokens are **EdDSA (Ed25519)** JWTs issued by `apps/api` (Better Auth `jwt()` plugin, `GET /api/auth/token`). The engine verifies them via **JWKS**:
+Tokens are **EdDSA (Ed25519)** JWTs minted by [`EngineTokenService`](../apps/api/src/services/engine-tokens.ts) in `apps/api`. The engine verifies them using either or both of:
 
-- `ENGINE_JWT_JWKS_URL` (e.g. `https://api.example.com/api/auth/jwks`): keys are selected by `kid` and cached for `ENGINE_JWT_JWKS_CACHE_TTL_S` (default `300`).
+- `ENGINE_JWT_PUBLIC_KEY`: Escaped SPKI Ed25519 PEM (`-----BEGIN PUBLIC KEY-----\n...`) injected into spawned containers by `@metamorph/orchestrator` for zero-roundtrip offline verification.
+- `ENGINE_JWT_JWKS_URL` (e.g. `https://api.example.com/.well-known/engine-jwks.json`): Public JWKS endpoint served by `apps/api`; keys are selected by `kid`, cached for `ENGINE_JWT_JWKS_CACHE_TTL_S` (default `300`), and also serve as fallback when a primary signing key is rotated.
 
 Claims:
 
 - `sub` (`string`, required): User ID; verified against `ENGINE_USER_ID` (or bound to the first user in dev).
-- `aud` (`string`): Verified against `ENGINE_JWT_AUDIENCE` when set; not checked when `ENGINE_JWT_AUDIENCE` is unset.
+- `aud` (`string`): Verified against `ENGINE_JWT_AUDIENCE` when set (set to `instanceId` by `@metamorph/orchestrator`); not checked when `ENGINE_JWT_AUDIENCE` is unset.
 - `iss` (`string`, optional): Verified when `ENGINE_JWT_ISSUER` is configured.
 - `exp` (`number`, required): Expiration timestamp (checked on HTTP, WS auth, and mid-session).
 - `modalities` (`("voice" | "video")[]`, optional): Defaults to enabled instance modalities; any requested modality not enabled on the instance returns `403` / WS `4003`.
@@ -128,7 +129,7 @@ Populate a volume once using [`download_models.sh`](../apps/engine-py/scripts/do
 - **Required `ENGINE_*` env vars**:
   - `ENGINE_INSTANCE_ID`, `ENGINE_USER_ID`
   - `ENGINE_ENABLE_VOICE` (`"true"`/`"false"`), `ENGINE_ENABLE_VIDEO` (`"true"`/`"false"`)
-  - `ENGINE_JWT_JWKS_URL` (JWKS endpoint URL, plus optional `ENGINE_JWT_ISSUER` / `ENGINE_JWT_AUDIENCE`)
+  - `ENGINE_JWT_PUBLIC_KEY` and/or `ENGINE_JWT_JWKS_URL` (plus `ENGINE_JWT_AUDIENCE` / optional `ENGINE_JWT_ISSUER`)
   - `ENGINE_LIFECYCLE_WEBHOOK_URL`, `ENGINE_LIFECYCLE_WEBHOOK_SECRET`
   - Optional bootstrap: `ENGINE_INITIAL_PROMPT`, `ENGINE_INITIAL_REF_IMAGE_URL`, `ENGINE_INITIAL_REF_AUDIO_URL`
 
@@ -148,7 +149,8 @@ Populate a volume once using [`download_models.sh`](../apps/engine-py/scripts/do
 | `ENGINE_INSTANCE_ID` / `ENGINE_USER_ID`                         | `local-instance` / `None` | Dedicated instance and user binding                |
 | `ENGINE_ENABLE_VOICE` / `ENGINE_ENABLE_VIDEO`                   | `true` / `true`           | Modalities loaded at boot                          |
 | `ENGINE_BACKEND`                                                | `gpu`                     | `gpu` (Seed-VC + JoyAI) or `mock` (CPU testing)    |
-| `ENGINE_JWT_JWKS_URL` / `_JWKS_CACHE_TTL_S`                     | `None` / `300`            | JWKS endpoint (Better Auth) and key cache TTL      |
+| `ENGINE_JWT_PUBLIC_KEY` / `ENGINE_JWT_JWKS_URL`                 | `None` / `None`           | Static SPKI Ed25519 PEM and/or `apps/api` JWKS URL |
+| `ENGINE_JWT_JWKS_CACHE_TTL_S`                                   | `300`                     | JWKS key cache TTL in seconds                      |
 | `ENGINE_JWT_ISSUER` / `ENGINE_JWT_AUDIENCE`                     | `None` / `None`           | Expected JWT `iss` and `aud` claims                |
 | `ENGINE_STARTUP_IDLE_TIMEOUT_S` / `ENGINE_DISCONNECT_TIMEOUT_S` | `120.0` / `30.0`          | Idle and disconnect shutdown timeouts              |
 | `ENGINE_LIFECYCLE_WEBHOOK_URL` / `_SECRET`                      | `None`                    | Signed lifecycle webhook destination               |

@@ -42,12 +42,17 @@ http {
         ''      '';
     }
 
+    map $http_cloudfront_forwarded_proto $forwarded_proto {
+        default $http_cloudfront_forwarded_proto;
+        ''      $scheme;
+    }
+
     include /etc/nginx/conf.d/*.conf;
 }
 EOF
 
 cat <<'EOF' > /etc/nginx/snippets/metamorph-proxy.conf
-client_max_body_size 30M;
+client_max_body_size 50M;
 
 location / {
     proxy_pass http://metamorph_api;
@@ -57,7 +62,7 @@ location / {
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Proto $forwarded_proto;
     proxy_buffering off;
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
@@ -117,6 +122,11 @@ if [ -z "$BETTER_AUTH_SECRET_VAL" ]; then
   echo "Warning: BETTER_AUTH_SECRET is missing in Secrets Manager secret $APP_SECRET_ID" >&2
 fi
 
+RESOLVED_JWKS_URL="$(jq -r '.ENGINE_JWT_JWKS_URL // empty' <<< "$APP_SECRET_JSON")"
+if [ -z "$RESOLVED_JWKS_URL" ]; then
+  RESOLVED_JWKS_URL="${API_PUBLIC_URL}/.well-known/engine-jwks.json"
+fi
+
 ENV_TMP="/etc/metamorph/app.env.tmp"
 ENV_FILE="/etc/metamorph/app.env"
 umask 077
@@ -132,6 +142,7 @@ BETTER_AUTH_TRUSTED_ORIGINS=$RESOLVED_ORIGINS
 BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET_VAL
 JWT_ISSUER=$API_PUBLIC_URL
 JWT_AUDIENCE=$API_PUBLIC_URL
+ENGINE_JWT_JWKS_URL=$RESOLVED_JWKS_URL
 S3_BUCKET=$S3_BUCKET
 S3_REGION=$S3_REGION
 ENVEOF
@@ -139,9 +150,14 @@ ENVEOF
 {
   for key in \
     GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
-    ENGINE_JWT_PRIVATE_KEY ENGINE_JWT_JWKS_URL \
+    ENGINE_JWT_PRIVATE_KEY \
     ENGINE_IMAGE_REPO ENGINE_IMAGE_TAG_FULL ENGINE_IMAGE_TAG_VOICE ENGINE_IMAGE_TAG_MOCK \
+    ENGINE_AUTO_DOWNLOAD_MODELS ENGINE_MODEL_VOLUME_DIR ENGINE_ALLOWED_ASSET_HOSTS \
+    ENGINE_STARTUP_IDLE_TIMEOUT_S ENGINE_DISCONNECT_TIMEOUT_S \
     ORCHESTRATOR_PROVIDERS ORCHESTRATOR_ALLOW_OVERRIDES \
+    ORCHESTRATOR_STARTUP_TIMEOUT_S ORCHESTRATOR_MAX_SESSION_DURATION_S \
+    ORCHESTRATOR_VOICE_GPU_IDS ORCHESTRATOR_VIDEO_STANDARD_GPU_IDS ORCHESTRATOR_VIDEO_HIGH_GPU_IDS \
+    ORCHESTRATOR_DUAL_STANDARD_GPU_IDS ORCHESTRATOR_DUAL_HIGH_GPU_IDS \
     RUNPOD_API_KEY RUNPOD_CLOUD_TYPE RUNPOD_DATA_CENTER_IDS RUNPOD_NETWORK_VOLUME_ID \
     VASTAI_API_KEY VASTAI_MAX_PRICE_PER_HR VASTAI_TLS_PROXY_BASE_URL; do
     val="$(jq -r --arg k "$key" '.[$k] // empty' <<< "$APP_SECRET_JSON")"

@@ -21,8 +21,7 @@ export type ExtendedEngineWsServerMessage =
       readonly reason?: string | null;
       readonly enhanced_prompt?: string;
     }
-  | { readonly type: "session_reset"; readonly reason?: string | null }
-  | { readonly type: "dropped"; readonly reason?: string | null };
+  | { readonly type: "session_reset"; readonly reason?: string | null };
 
 export function isAssetFetchFallbackError(err: unknown): boolean {
   return err instanceof ApiError && (err.status === 422 || err.status === 502);

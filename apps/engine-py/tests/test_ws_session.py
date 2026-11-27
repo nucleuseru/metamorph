@@ -192,6 +192,19 @@ def test_video_only_pod_rv2v_and_hot_swap(
         assert updated["type"] == "config_updated"
         assert updated["hot_swapped"] is True
         assert updated["assets"]["has_ref_image"] is False
+        assert updated["assets"]["has_prompt"] is True
+
+        # Reset prompt back to default using empty string
+        ws.send_json(
+            {
+                "type": "update_config",
+                "prompt": "",
+                "video": {"enabled": True, "input_codec": "mjpeg", "output_codec": "mjpeg"},
+            }
+        )
+        reset_prompt = ws.receive_json()
+        assert reset_prompt["type"] == "config_updated"
+        assert reset_prompt["assets"]["has_prompt"] is False
 
         # Send 2 more frames (chunk 1 size=2)
         ws.send_bytes(

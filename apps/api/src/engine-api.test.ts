@@ -701,6 +701,39 @@ describe("Engine API, Orchestrator, Assets, Personas, SSE & WS Relay", () => {
     assert.equal(forwarded.prompt, "Anime cel shading");
     assert.ok(forwarded.ref_image_url?.includes(uploadedImageId));
 
+    // PATCH /sessions/:id/config with personaId + clearRefImage / refImageBase64 omits ref_image_url
+    const clearPatchRes = await fetch(apiUrl(`/sessions/${activeSessionId}/config`), {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "x-test-user": "user-1" },
+      body: JSON.stringify({
+        personaId: createdPersonaId,
+        clearRefImage: true,
+      }),
+    });
+    assert.equal(clearPatchRes.status, 200);
+    const clearForwarded = mockState.configPatches.at(-1)!.body as {
+      clear_ref_image?: boolean;
+      ref_image_url?: string;
+    };
+    assert.equal(clearForwarded.clear_ref_image, true);
+    assert.equal(clearForwarded.ref_image_url, undefined);
+
+    const b64PatchRes = await fetch(apiUrl(`/sessions/${activeSessionId}/config`), {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "x-test-user": "user-1" },
+      body: JSON.stringify({
+        personaId: createdPersonaId,
+        refImageBase64: "AQID",
+      }),
+    });
+    assert.equal(b64PatchRes.status, 200);
+    const b64Forwarded = mockState.configPatches.at(-1)!.body as {
+      ref_image_base64?: string;
+      ref_image_url?: string;
+    };
+    assert.equal(b64Forwarded.ref_image_base64, "AQID");
+    assert.equal(b64Forwarded.ref_image_url, undefined);
+
     // POST /sessions/:id/assets multipart hot-swap
     const form = new FormData();
     form.set("prompt", "Studio portrait");
@@ -836,19 +869,35 @@ describe("Engine API, Orchestrator, Assets, Personas, SSE & WS Relay", () => {
     assert.equal(usageJson.byProvider["local"]?.sessions, 1);
 
     // Verify relay mode when tlsSupported=false (e.g. Vast.ai direct IP)
+    // and verify voice-only session with dual-modality persona omits video initialConfig
     nextTlsSupported = false;
+    const voicePersonaRes = await fetch(apiUrl("/personas"), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-test-user": "user-2" },
+      body: JSON.stringify({
+        name: "Dual For User2",
+        modalities: ["voice", "video"],
+        prompt: "Neon suit",
+      }),
+    });
+    assert.equal(voicePersonaRes.status, 201);
+    const voicePersona = (await voicePersonaRes.json()) as { id: string };
+
     const relayCreate = await fetch(apiUrl("/sessions"), {
       method: "POST",
       headers: { "content-type": "application/json", "x-test-user": "user-2" },
-      body: JSON.stringify({ modalities: ["voice"] }),
+      body: JSON.stringify({ modalities: ["voice"], personaId: voicePersona.id }),
     });
     assert.equal(relayCreate.status, 201);
     const relaySession = (await relayCreate.json()) as {
       id: string;
       connection: { mode: string; wsUrl: string; relayWsUrl: string };
+      initialConfig: { prompt: string | null; refImageUrl: string | null };
     };
     assert.equal(relaySession.connection.mode, "relay");
     assert.equal(relaySession.connection.wsUrl, relaySession.connection.relayWsUrl);
+    assert.equal(relaySession.initialConfig.prompt, null);
+    assert.equal(relaySession.initialConfig.refImageUrl, null);
 
     // Mint restricted-modality token rejection check
     const badModToken = await fetch(apiUrl(`/sessions/${relaySession.id}/token`), {

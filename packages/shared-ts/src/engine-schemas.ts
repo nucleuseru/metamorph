@@ -262,6 +262,11 @@ export const EngineWsServerEditingMessage = Schema.Struct({
   reason: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
+export const EngineWsServerDroppedMessage = Schema.Struct({
+  type: Schema.Literal("dropped"),
+  reason: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
+
 export const EngineWsServerSessionSupersededMessage = Schema.Struct({
   type: Schema.Literal("session_superseded"),
   message: Schema.String,
@@ -286,6 +291,7 @@ export const EngineWsServerMessage = Schema.Union([
   EngineWsServerWaitingFaceMessage,
   EngineWsServerNoPersonMessage,
   EngineWsServerEditingMessage,
+  EngineWsServerDroppedMessage,
   EngineWsServerSessionSupersededMessage,
   EngineWsServerStoppedMessage,
   EngineWsServerErrorMessage,

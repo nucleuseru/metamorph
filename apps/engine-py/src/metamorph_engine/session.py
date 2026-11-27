@@ -640,8 +640,12 @@ class EngineSessionManager:
 
         async with self._lock:
             if patch.prompt is not None:
-                self._staged_prompt = patch.prompt
-                self._has_custom_prompt = True
+                if patch.prompt.strip() == "":
+                    self._staged_prompt = DEFAULT_VIDEO_PROMPT
+                    self._has_custom_prompt = False
+                else:
+                    self._staged_prompt = patch.prompt
+                    self._has_custom_prompt = True
             if update_ref_image:
                 self._staged_ref_image = new_ref_image
             if new_ref_audio is not None:

@@ -66,12 +66,15 @@ export const makeSessionLifecycleHandlers = (
             });
           }
 
+          const hasVideo = resolvedModalities.includes("video");
+          const hasVoice = resolvedModalities.includes("voice");
+
           const refImageAssetId =
-            payload.refImageUrl !== undefined
+            !hasVideo || payload.refImageUrl !== undefined
               ? null
               : (payload.refImageAssetId ?? personaRecord?.refImageAssetId ?? null);
           const refAudioAssetId =
-            payload.refAudioUrl !== undefined
+            !hasVoice || payload.refAudioUrl !== undefined
               ? null
               : (payload.refAudioAssetId ?? personaRecord?.refAudioAssetId ?? null);
 
@@ -80,9 +83,9 @@ export const makeSessionLifecycleHandlers = (
             resolveSignedAssetUrl(user.id, refAudioAssetId, "ref_audio"),
           ]);
 
-          const initialRefImageUrl = payload.refImageUrl ?? signedImgUrl;
-          const initialRefAudioUrl = payload.refAudioUrl ?? signedAudUrl;
-          const initialPrompt = payload.prompt ?? personaRecord?.prompt ?? null;
+          const initialRefImageUrl = hasVideo ? (payload.refImageUrl ?? signedImgUrl) : null;
+          const initialRefAudioUrl = hasVoice ? (payload.refAudioUrl ?? signedAudUrl) : null;
+          const initialPrompt = hasVideo ? (payload.prompt ?? personaRecord?.prompt ?? null) : null;
 
           const record = yield* orchestrator
             .provisionSession({
@@ -118,8 +121,8 @@ export const makeSessionLifecycleHandlers = (
 
           return yield* formatSession(record, {
             includeToken: true,
-            video: payload.video ?? personaRecord?.videoConfig ?? null,
-            audio: payload.audio ?? personaRecord?.audioConfig ?? null,
+            video: hasVideo ? (payload.video ?? personaRecord?.videoConfig ?? null) : null,
+            audio: hasVoice ? (payload.audio ?? personaRecord?.audioConfig ?? null) : null,
             explicitRefImageUrl: initialRefImageUrl,
             explicitRefAudioUrl: initialRefAudioUrl,
           });

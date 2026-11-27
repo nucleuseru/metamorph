@@ -196,10 +196,102 @@ def test_ws_auth_via_jwks_defaults_to_enabled_modalities(
 
 def test_no_verification_key_configured_rejects_tokens() -> None:
     priv, _ = generate_ed25519_keypair()
-    app = create_app(build_test_settings(jwt_jwks_url=None))
+    app = create_app(build_test_settings(jwt_jwks_url=None, jwt_public_key=None))
     with TestClient(app) as client:
         resp = client.get(
             "/session/status",
             headers={"Authorization": f"Bearer {mint_jwt(priv)}"},
         )
         assert resp.status_code == 401
+
+
+def test_static_public_key_pem_with_escaped_newlines_and_jwks_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    priv_primary, pub_pem_primary = generate_ed25519_keypair()
+    priv_rotated, _ = generate_ed25519_keypair()
+    escaped_pem = pub_pem_primary.strip().replace("\n", "\\n")
+
+    # 1. Static PEM only (no JWKS URL)
+    settings_static = build_test_settings(
+        jwt_public_key=escaped_pem,
+        jwt_jwks_url=None,
+        jwt_issuer="metamorph-api",
+        jwt_audience="inst-1",
+    )
+    app_static = create_app(settings_static)
+    with TestClient(app_static) as client:
+        ok_token = mint_jwt(priv_primary, iss="metamorph-api", modalities=["voice", "video"])
+        assert (
+            client.get(
+                "/session/status",
+                headers={"Authorization": f"Bearer {ok_token}"},
+            ).status_code
+            == 200
+        )
+
+        # Rejects wrong signature, wrong aud, wrong sub, expired
+        assert (
+            client.get(
+                "/session/status",
+                headers={"Authorization": f"Bearer {mint_jwt(priv_rotated, iss='metamorph-api')}"},
+            ).status_code
+            == 401
+        )
+        bad_aud = mint_jwt(priv_primary, aud="inst-other", iss="metamorph-api")
+        assert (
+            client.get(
+                "/session/status",
+                headers={"Authorization": f"Bearer {bad_aud}"},
+            ).status_code
+            == 401
+        )
+        bad_sub = mint_jwt(priv_primary, sub="user-999", iss="metamorph-api")
+        assert (
+            client.get(
+                "/session/status",
+                headers={"Authorization": f"Bearer {bad_sub}"},
+            ).status_code
+            == 403
+        )
+        expired_tok = mint_jwt(priv_primary, exp_offset_s=-60, iss="metamorph-api")
+        assert (
+            client.get(
+                "/session/status",
+                headers={"Authorization": f"Bearer {expired_tok}"},
+            ).status_code
+            == 401
+        )
+
+        with client.websocket_connect("/ws/session") as ws:
+            ws.send_json({"type": "auth", "token": ok_token})
+            auth_ok = ws.receive_json()
+            assert auth_ok["type"] == "auth_ok"
+            assert auth_ok["authorized_modalities"] == ["voice", "video"]
+
+    # 2. Both static PEM and JWKS URL: rotated key verifies via JWKS fallback
+    from tests.conftest import jwks_for
+
+    rotated_jwks = jwks_for(priv_rotated, "rotated-kid")
+    monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", lambda self: rotated_jwks)
+
+    settings_both = build_test_settings(
+        jwt_public_key=escaped_pem,
+        jwt_jwks_url=JWKS_URL,
+        jwt_issuer="metamorph-api",
+        jwt_audience="inst-1",
+    )
+    app_both = create_app(settings_both)
+    with TestClient(app_both) as client:
+        rotated_token = mint_jwt(
+            priv_rotated,
+            kid="rotated-kid",
+            iss="metamorph-api",
+            modalities=["voice"],
+        )
+        resp = client.get(
+            "/session/status",
+            headers={"Authorization": f"Bearer {rotated_token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["user_id"] == "user-1"
