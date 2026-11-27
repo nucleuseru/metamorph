@@ -332,9 +332,9 @@ export class EngineOrchestrator extends Context.Service<
                   }
                 }
                 if (readyRes.success.response.status === "shutting_down") {
-                  yield* stopAndCleanup(current, "engine_shutting_down_during_startup").pipe(
-                    Effect.ignore,
-                  );
+                  const reason =
+                    readyRes.success.response.reason ?? "engine_shutting_down_during_startup";
+                  yield* failAndCleanup(current, reason).pipe(Effect.ignore);
                   return;
                 }
               }
@@ -575,8 +575,16 @@ export class EngineOrchestrator extends Context.Service<
           return res;
         }
 
-        // shutting_down
-        return yield* stopAndCleanup(record, event.reason ?? "engine_shutting_down");
+        // shutting_down: surface startup failures as `failed` instead of silently stopping
+        const shutdownReason = event.reason ?? "engine_shutting_down";
+        if (
+          record.status === "provisioning" ||
+          record.status === "warming" ||
+          shutdownReason.startsWith("startup_failed")
+        ) {
+          return yield* failAndCleanup(record, shutdownReason);
+        }
+        return yield* stopAndCleanup(record, shutdownReason);
       });
 
       const reconcileOnce: EngineOrchestratorShape["reconcileOnce"] = Effect.gen(function* () {

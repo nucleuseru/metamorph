@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from metamorph_engine.config import EngineSettings
-from metamorph_engine.pipelines.base import resample_audio_linear
+from metamorph_engine.pipelines.base import resample_audio_hq
 
 
 class AssetError(ValueError):
@@ -64,11 +64,11 @@ def _decode_audio_sync(data: bytes, target_sr: int) -> np.ndarray:
     if not data:
         raise AssetError("Empty reference audio payload.")
 
-    # Fast path for standard RIFF/WAVE PCM without heavy deps
+    # Fast path for standard RIFF/WAVE PCM with anti-aliased resampling
     if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
         try:
             audio, sr = _decode_wav_bytes_stdlib(data)
-            return resample_audio_linear(audio, sr, target_sr)
+            return resample_audio_hq(audio, sr, target_sr)
         except wave.Error:
             pass
 

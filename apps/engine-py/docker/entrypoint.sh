@@ -42,6 +42,9 @@ export JOYOMNI_DIT_CKPT="${JOYOMNI_DIT_CKPT:-$ENGINE_VIDEO_DIT_CKPT}"
 export JOYOMNI_VAE_CKPT="${JOYOMNI_VAE_CKPT:-$ENGINE_VIDEO_VAE_CKPT}"
 export JOYOMNI_TEXT_ENCODER_CKPT="${JOYOMNI_TEXT_ENCODER_CKPT:-$ENGINE_VIDEO_TEXT_ENCODER_CKPT}"
 export JOYOMNI_PE_BACKEND="${JOYOMNI_PE_BACKEND:-none}"
+export JOYOMNI_FP8_IMG="${JOYOMNI_FP8_IMG:-1}"
+export JOYOMNI_FP8_TXT="${JOYOMNI_FP8_TXT:-1}"
+export JOYOMNI_CUDA_GRAPH="${JOYOMNI_CUDA_GRAPH:-1}"
 
 # Detect GPU and apply per-GPU compile cache isolation + tuning defaults
 GPU_SLUG="cpu"
@@ -91,7 +94,40 @@ if [ "${ENGINE_BACKEND:-gpu}" = "gpu" ] && command -v nvidia-smi >/dev/null 2>&1
     fi
 fi
 
-export JOYOMNI_CACHE_ROOT="${JOYOMNI_CACHE_ROOT:-$MODEL_VOLUME_DIR/cache/$GPU_SLUG}"
+is_fuse_or_network_path() {
+    local target="$1"
+    [ -r /proc/mounts ] || return 1
+    awk -v path="$target" '
+        BEGIN { best_len = 0; best_fs = "" }
+        {
+            mp = $2; gsub(/\\040/, " ", mp);
+            fs = tolower($3);
+            if (mp == "/" || path == mp || index(path, mp "/") == 1) {
+                if (length(mp) > best_len) {
+                    best_len = length(mp);
+                    best_fs = fs;
+                }
+            }
+        }
+        END {
+            if (best_fs ~ /^(fuse(\.|$)|nfs|ceph|9p|s3fs|gcsfuse|lustre|glusterfs|sshfs|virtiofs|cifs|smb)/) {
+                exit 0;
+            }
+            exit 1;
+        }
+    ' /proc/mounts
+}
+
+VOLUME_CACHE_ROOT="$MODEL_VOLUME_DIR/cache/$GPU_SLUG"
+if [ -z "${JOYOMNI_CACHE_ROOT:-}" ]; then
+    if is_fuse_or_network_path "$MODEL_VOLUME_DIR"; then
+        # Avoid TorchInductor/Triton lock & rename hangs on FUSE/network global volumes
+        JOYOMNI_CACHE_ROOT="/tmp/metamorph-cache/$GPU_SLUG"
+    else
+        JOYOMNI_CACHE_ROOT="$VOLUME_CACHE_ROOT"
+    fi
+fi
+export JOYOMNI_CACHE_ROOT
 export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-$JOYOMNI_CACHE_ROOT/torchinductor}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$JOYOMNI_CACHE_ROOT/triton}"
 export CUDA_CACHE_PATH="${CUDA_CACHE_PATH:-$JOYOMNI_CACHE_ROOT/nv_compute}"
@@ -106,6 +142,9 @@ HUGGINGFACE_HUB_CACHE=$HUGGINGFACE_HUB_CACHE
 TORCH_HOME=$TORCH_HOME
 JOYOMNI_CKPT_ROOT=$JOYOMNI_CKPT_ROOT
 JOYOMNI_CACHE_ROOT=$JOYOMNI_CACHE_ROOT
+JOYOMNI_FP8_IMG=$JOYOMNI_FP8_IMG
+JOYOMNI_FP8_TXT=$JOYOMNI_FP8_TXT
+JOYOMNI_CUDA_GRAPH=$JOYOMNI_CUDA_GRAPH
 TORCHINDUCTOR_CACHE_DIR=$TORCHINDUCTOR_CACHE_DIR
 TRITON_CACHE_DIR=$TRITON_CACHE_DIR
 CUDA_CACHE_PATH=$CUDA_CACHE_PATH
@@ -125,6 +164,12 @@ mkdir -p \
     "$TORCHINDUCTOR_CACHE_DIR" \
     "$TRITON_CACHE_DIR" \
     "$CUDA_CACHE_PATH"
+
+# Seed local SSD compile cache from persistent volume if pre-populated
+if [ "$JOYOMNI_CACHE_ROOT" != "$VOLUME_CACHE_ROOT" ] && [ -d "$VOLUME_CACHE_ROOT" ]; then
+    printf '[entrypoint] Seeding local compile cache %s from %s\n' "$JOYOMNI_CACHE_ROOT" "$VOLUME_CACHE_ROOT" >&2
+    cp -rn "$VOLUME_CACHE_ROOT/." "$JOYOMNI_CACHE_ROOT/" 2>/dev/null || true
+fi
 
 # Optionally bootstrap missing models on startup
 if [ "${AUTO_DOWNLOAD_MODELS:-false}" = "true" ] && [ "${ENGINE_BACKEND:-gpu}" = "gpu" ]; then
@@ -148,7 +193,11 @@ if [ "${ENGINE_BACKEND:-gpu}" = "gpu" ] && [ "${ENGINE_ENABLE_VIDEO:-true}" = "t
         printf '[entrypoint] Missing required video model weights on %s:\n' "$CKPT_ROOT" >&2
         printf '  - %s\n' "${missing[@]}" >&2
         printf '[entrypoint] Mount a pre-populated model volume at /models (or set MODEL_VOLUME_DIR), or set AUTO_DOWNLOAD_MODELS=true.\n' >&2
-        exit 1
+        # When orchestrated via webhook, let metamorph-engine start and report startup_failed
+        # cleanly so the orchestrator fails fast and terminates the pod instead of crash-looping.
+        if [ -z "${ENGINE_LIFECYCLE_WEBHOOK_URL:-}" ]; then
+            exit 1
+        fi
     fi
 fi
 

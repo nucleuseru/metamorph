@@ -25,7 +25,8 @@ from metamorph_engine.pipelines.base import (
     VoicePipeline,
     VoiceSession,
     encode_pcm_bytes,
-    resample_audio_linear,
+    prepare_reference_audio,
+    resample_audio_hq,
     soft_limit_audio,
 )
 from metamorph_engine.protocol import AudioCodec, FrameFlags
@@ -318,6 +319,15 @@ class SeedVCVoiceSession(VoiceSession):
         self._resampler_in_sr: int | None = None
         self._resampler_out: Any | None = None
         self._resampler_out_sr: int | None = None
+        self._resampler_16k: Any | None = (
+            self._loaded.torchaudio.transforms.Resample(
+                orig_freq=self._sr,
+                new_freq=16000,
+                dtype=self._torch.float32,
+            ).to(self._loaded.device)
+            if self._loaded.torchaudio is not None
+            else None
+        )
 
         self._init_buffers()
 
@@ -395,7 +405,7 @@ class SeedVCVoiceSession(VoiceSession):
             with self._torch.inference_mode():
                 t = self._torch.from_numpy(samples).to(self._loaded.device)
                 return self._resampler_in(t).detach().cpu().numpy().astype(np.float32)
-        return resample_audio_linear(samples, input_sr, self._sr)
+        return resample_audio_hq(samples, input_sr, self._sr)
 
     def _resample_outgoing(self, tensor: Any, output_sr: int) -> np.ndarray:
         if output_sr == self._sr:
@@ -409,7 +419,7 @@ class SeedVCVoiceSession(VoiceSession):
                 ).to(self._loaded.device)
                 self._resampler_out_sr = output_sr
             return self._resampler_out(tensor).detach().cpu().numpy().astype(np.float32)
-        return resample_audio_linear(
+        return resample_audio_hq(
             tensor.detach().cpu().numpy().astype(np.float32),
             self._sr,
             output_sr,
@@ -469,9 +479,12 @@ class SeedVCVoiceSession(VoiceSession):
                 block_16k = 320 * self._block_frame // self._zc
                 self._input_wav_res[:-block_16k] = self._input_wav_res[block_16k:].clone()
                 tail_src = self._input_wav[-self._block_frame - 2 * self._zc :]
-                tail_16k = self._loaded.torchaudio.functional.resample(
-                    tail_src.unsqueeze(0), self._sr, 16000
-                ).squeeze(0)
+                if self._resampler_16k is not None:
+                    tail_16k = self._resampler_16k(tail_src.unsqueeze(0)).squeeze(0)
+                else:
+                    tail_16k = self._loaded.torchaudio.functional.resample(
+                        tail_src.unsqueeze(0), self._sr, 16000
+                    ).squeeze(0)
                 fill_len = 320 * (self._block_frame // self._zc + 1)
                 slice_16k = tail_16k[320 : 320 + fill_len]
                 if slice_16k.shape[0] < fill_len:
@@ -599,7 +612,16 @@ class SeedVCVoicePipeline(VoicePipeline):
         campplus_mod = importlib.import_module("modules.campplus.DTDNN")
 
         device = torch.device(self.settings.device if torch.cuda.is_available() else "cpu")
-        dtype = torch.float16 if self.settings.dtype in ("float16", "bfloat16") else torch.float32
+        if self.settings.voice_dtype == "float32":
+            dtype = torch.float32
+        elif self.settings.voice_dtype == "bfloat16":
+            dtype = getattr(torch, "bfloat16", torch.float16)
+        elif self.settings.voice_dtype == "float16":
+            dtype = torch.float16
+        else:
+            dtype = (
+                torch.float16 if self.settings.dtype in ("float16", "bfloat16") else torch.float32
+            )
         if device.type == "cuda":
             self.cuda_stream = torch.cuda.Stream(device=device)
 
@@ -767,7 +789,14 @@ class SeedVCVoicePipeline(VoicePipeline):
             t_ref = np.arange(sr, dtype=np.float32) / float(sr)
             dummy_ref = (0.05 * np.sin(2.0 * np.pi * 220.0 * t_ref)).astype(np.float32)
             self.set_reference_audio(dummy_ref, sr)
-            sess = self.create_session(AudioSessionConfig(vad_threshold_db=-90.0))
+            sess = self.create_session(
+                AudioSessionConfig(
+                    diffusion_steps=self.settings.voice_diffusion_steps,
+                    cfg_rate=self.settings.voice_cfg_rate,
+                    block_time_s=self.settings.voice_block_time_s,
+                    vad_threshold_db=-90.0,
+                )
+            )
             zc = sr // 50
             blk_len = max(1, round(self.settings.voice_block_time_s * sr / zc)) * zc
             t_blk = np.arange(blk_len, dtype=np.float32) / float(sr)
@@ -792,23 +821,28 @@ class SeedVCVoicePipeline(VoicePipeline):
         torch = loaded.torch
         torchaudio = loaded.torchaudio
         sr = loaded.sr
-        max_samples = int(sr * self.settings.voice_max_prompt_length_s)
+        max_prompt_s = self.settings.voice_max_prompt_length_s
+        cleaned_ref = prepare_reference_audio(
+            audio_f32,
+            sample_rate,
+            max_duration_s=max_prompt_s,
+        )
+        max_samples = int(sr * max_prompt_s)
 
         with self.infer_lock, torch.inference_mode():
             if sample_rate == sr:
                 ref_tensor = torch.from_numpy(
-                    np.asarray(audio_f32[:max_samples], dtype=np.float32)
+                    np.asarray(cleaned_ref[:max_samples], dtype=np.float32)
                 ).to(loaded.device)
             elif torchaudio is not None:
-                raw_max = int(sample_rate * self.settings.voice_max_prompt_length_s) + sample_rate
-                raw_tensor = torch.from_numpy(np.asarray(audio_f32[:raw_max], dtype=np.float32)).to(
+                raw_tensor = torch.from_numpy(np.asarray(cleaned_ref, dtype=np.float32)).to(
                     loaded.device
                 )
                 ref_tensor = torchaudio.functional.resample(raw_tensor, sample_rate, sr)[
                     :max_samples
                 ]
             else:
-                resampled = resample_audio_linear(audio_f32, sample_rate, sr)
+                resampled = resample_audio_hq(cleaned_ref, sample_rate, sr)
                 ref_tensor = torch.from_numpy(resampled[:max_samples]).to(loaded.device)
             waves_16k = torchaudio.functional.resample(ref_tensor, sr, 16000)
             s_ori = loaded.semantic_fn(waves_16k.unsqueeze(0))

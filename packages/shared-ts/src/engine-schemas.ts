@@ -99,6 +99,7 @@ export const EngineReadyResponse = Schema.Struct({
   lifecycle_state: Schema.String,
   instance_id: Schema.String,
   enabled_modalities: Schema.Array(Modality),
+  reason: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type EngineReadyResponse = typeof EngineReadyResponse.Type;
 

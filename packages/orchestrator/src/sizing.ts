@@ -56,7 +56,7 @@ export function resolveHardwareProfile(input: ResolveHardwareInput): HardwareSpe
   }
 
   const isHigh = input.quality === "high";
-  const videoWidth = isHigh ? 1280 : 840;
+  const videoWidth = isHigh ? 1248 : 840;
   const videoHeight = isHigh ? 720 : 480;
   const videoFps = 24;
 

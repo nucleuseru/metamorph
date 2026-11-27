@@ -84,8 +84,8 @@ def test_voice_only_pod_streams_and_hot_swaps_reference_audio(
             assert started["voice_active"] is True
             assert started["video_active"] is False
 
-            # Send 240ms (12 * 441 = 5292 samples) voiced PCM chunk matching 20ms semantic hop
-            voiced = make_pcm16_chunk(freq_hz=440.0, duration_s=0.24, sr=22050, amplitude=0.6)
+            # Send 400ms (20 * 441 = 8820 samples) voiced PCM chunk matching 20ms semantic hop
+            voiced = make_pcm16_chunk(freq_hz=440.0, duration_s=0.40, sr=22050, amplitude=0.6)
             ws.send_bytes(
                 pack_frame(Track.AUDIO, AudioCodec.PCM_S16LE, seq=1, pts_us=200_000, payload=voiced)
             )
@@ -96,14 +96,14 @@ def test_voice_only_pod_streams_and_hot_swaps_reference_audio(
             assert hdr.flags & FrameFlags.SPEECH_ACTIVE
             assert len(payload) == len(voiced)
 
-            # Send silent chunks past 0.3s hangover -> VAD marks SILENCE
-            silent = b"\x00\x00" * 5292
+            # Send silent chunks past 0.5s hangover -> VAD marks SILENCE
+            silent = b"\x00\x00" * 8820
             ws.send_bytes(
                 pack_frame(Track.AUDIO, AudioCodec.PCM_S16LE, seq=2, pts_us=900_000, payload=silent)
             )
             ws.send_bytes(
                 pack_frame(
-                    Track.AUDIO, AudioCodec.PCM_S16LE, seq=3, pts_us=1_140_000, payload=silent
+                    Track.AUDIO, AudioCodec.PCM_S16LE, seq=3, pts_us=1_300_000, payload=silent
                 )
             )
             frames2, _ = _receive_binary_until(ws, count=2)
@@ -282,7 +282,7 @@ def test_dual_modality_hybrid_bootstrap_and_synced_stream(
             assert pong["t"] == 1234.5
 
             # Stream interleaved video + audio frames
-            pcm_s16 = make_pcm16_chunk(freq_hz=440.0, duration_s=0.25, sr=22050, amplitude=0.5)
+            pcm_s16 = make_pcm16_chunk(freq_hz=440.0, duration_s=0.40, sr=22050, amplitude=0.5)
             mjpeg_frame = make_jpeg_bytes(width=64, height=48, color=(120, 80, 200))
 
             ws.send_bytes(

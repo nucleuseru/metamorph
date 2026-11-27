@@ -75,19 +75,20 @@ class EngineSettings(BaseSettings):
     async_startup: bool | None = None
     vendor_dir: str | None = None
 
-    # Voice pipeline (Seed-VC v1 real-time)
+    # Voice pipeline (Seed-VC v1 real-time — tuned for maximum clarity on cloud GPUs)
     voice_sample_rate: int = Field(default=22050, ge=8000, le=96000)
-    voice_block_time_s: float = Field(default=0.25, gt=0.02, le=2.0)
-    voice_crossfade_s: float = Field(default=0.04, gt=0.0, le=0.5)
-    voice_extra_context_left_s: float = Field(default=2.5, ge=0.1, le=15.0)
-    voice_extra_dit_context_left_s: float = Field(default=0.5, ge=0.05, le=10.0)
-    voice_extra_context_right_s: float = Field(default=0.04, ge=0.0, le=2.0)
-    voice_diffusion_steps: int = Field(default=10, ge=1, le=50)
+    voice_block_time_s: float = Field(default=0.40, gt=0.02, le=2.0)
+    voice_crossfade_s: float = Field(default=0.08, gt=0.0, le=0.5)
+    voice_extra_context_left_s: float = Field(default=5.0, ge=0.1, le=15.0)
+    voice_extra_dit_context_left_s: float = Field(default=2.5, ge=0.05, le=10.0)
+    voice_extra_context_right_s: float = Field(default=0.16, ge=0.0, le=2.0)
+    voice_diffusion_steps: int = Field(default=30, ge=1, le=50)
     voice_cfg_rate: float = Field(default=0.7, ge=0.0, le=2.0)
-    voice_max_prompt_length_s: float = Field(default=3.0, ge=0.5, le=30.0)
+    voice_max_prompt_length_s: float = Field(default=15.0, ge=0.5, le=30.0)
+    voice_dtype: Literal["auto", "float16", "bfloat16", "float32"] = "auto"
     voice_vad_backend: Literal["rms", "none"] = "rms"
-    voice_vad_threshold_db: float = Field(default=-45.0, ge=-90.0, le=0.0)
-    voice_vad_hangover_s: float = Field(default=0.3, ge=0.0, le=5.0)
+    voice_vad_threshold_db: float = Field(default=-48.0, ge=-90.0, le=0.0)
+    voice_vad_hangover_s: float = Field(default=0.5, ge=0.0, le=5.0)
     voice_vad_adaptive_noise_floor: bool = True
     voice_vad_noise_margin_db: float = Field(default=10.0, ge=0.0, le=40.0)
     voice_checkpoint_path: str | None = None
@@ -108,6 +109,7 @@ class EngineSettings(BaseSettings):
     video_dit_ckpt: str | None = None
     video_vae_ckpt: str | None = None
     video_text_encoder_ckpt: str | None = None
+    video_disable_mmap: Literal["auto", "true", "false"] = "auto"
     video_session_close_timeout_s: float = Field(default=5.0, gt=0.0)
 
     # A/V Synchronization

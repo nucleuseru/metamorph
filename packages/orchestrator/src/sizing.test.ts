@@ -36,7 +36,7 @@ describe("Hardware sizing and engine env generation", () => {
       config: defaultOrchestratorConfig,
     });
     assert.equal(videoHigh.minVramGb, 48);
-    assert.equal(videoHigh.videoWidth, 1280);
+    assert.equal(videoHigh.videoWidth, 1248);
     assert.equal(videoHigh.videoHeight, 720);
 
     const dualStd = resolveHardwareProfile({
@@ -93,7 +93,7 @@ describe("Hardware sizing and engine env generation", () => {
     assert.equal(env["ENGINE_JWT_AUDIENCE"], "inst-123");
     assert.equal(env["ENGINE_ENABLE_VOICE"], "true");
     assert.equal(env["ENGINE_ENABLE_VIDEO"], "true");
-    assert.equal(env["ENGINE_VIDEO_WIDTH"], "1280");
+    assert.equal(env["ENGINE_VIDEO_WIDTH"], "1248");
     assert.equal(env["ENGINE_VIDEO_HEIGHT"], "720");
     assert.equal(env["ENGINE_LIFECYCLE_WEBHOOK_SECRET"], "sec-789");
     assert.equal(env["ENGINE_INITIAL_PROMPT"], "cyberpunk neon jacket");

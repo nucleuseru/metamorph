@@ -693,6 +693,8 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
             inference_cfg_rate: builtins.float,
         ) -> _FakeTensor:
             state["cfm_calls"] += 1
+            state.setdefault("diffusion_steps", []).append(n_timesteps)
+            state.setdefault("cfg_rates", []).append(inference_cfg_rate)
             total_mel_frames = mu.shape[1]
             # Simulate flow matching producing fp16 inside autocast
             return _FakeTensor(np.zeros((1, 80, total_mel_frames), dtype=np.float16))
@@ -876,6 +878,8 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
 
     # Warmup must run cfm.inference + HiFT outside autocast with fp32 mel, then clear ref audio
     assert state["cfm_calls"] == 1
+    assert state["diffusion_steps"] == [30]
+    assert state["cfg_rates"] == [0.7]
     assert state["hift_autocast_depths"] == [0]
     assert state["hift_dtypes"] == [np.float32]
     assert pipe.has_reference_audio is False
@@ -885,10 +889,10 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
     pipe.set_reference_audio(np.ones(22050, dtype=np.float32) * 0.1, 22050)
     assert pipe.has_reference_audio is True
 
-    # Silent chunk -> VAD marks SILENCE without running cfm
+    # Silent chunk (400ms = 20 * 441 = 8820 samples) -> VAD marks SILENCE without running cfm
     silent_outs = sess.push_audio(
         AudioChunkIn(
-            samples=np.zeros(5292, dtype=np.float32),
+            samples=np.zeros(8820, dtype=np.float32),
             sample_rate=22050,
             codec=AudioCodec.PCM_S16LE,
             seq=1,
@@ -900,19 +904,20 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
     assert state["cfm_calls"] == 1
 
     # Voiced chunk -> runs infer_window + HiFT outside autocast
-    voiced = (0.2 * np.sin(2.0 * np.pi * 220.0 * np.arange(5292) / 22050.0)).astype(np.float32)
+    voiced = (0.2 * np.sin(2.0 * np.pi * 220.0 * np.arange(8820) / 22050.0)).astype(np.float32)
     voiced_outs = sess.push_audio(
         AudioChunkIn(
             samples=voiced,
             sample_rate=22050,
             codec=AudioCodec.PCM_S16LE,
             seq=2,
-            pts_us=240_000,
+            pts_us=400_000,
         )
     )
     assert len(voiced_outs) == 1
     assert bool(voiced_outs[0].flags & FrameFlags.SPEECH_ACTIVE) is True
     assert state["cfm_calls"] == 2
+    assert state["diffusion_steps"] == [30, 30]
     assert state["hift_autocast_depths"] == [0, 0]
     assert state["hift_dtypes"] == [np.float32, np.float32]
 
@@ -984,3 +989,70 @@ def test_soft_limit_audio_transparent_below_threshold_and_bounds_peaks() -> None
     assert float(np.max(np.abs(limited))) < 0.98
     assert float(limited[0]) < float(limited[1]) < -0.9
     assert 0.9 < float(limited[5]) < float(limited[6]) < 0.98
+
+
+def test_prepare_reference_audio_trims_silence_removes_dc_and_normalizes() -> None:
+    """Reference conditioning trims dead edges before capping length and normalizes quiet clips."""
+    from metamorph_engine.pipelines.base import prepare_reference_audio
+
+    sr = 22050
+    lead_silence = np.zeros(sr * 2, dtype=np.float32)
+    t = np.arange(sr * 2, dtype=np.float32) / float(sr)
+    # Quiet -26 dBFS speech with +0.05 DC bias
+    speech = (0.05 * np.sin(2.0 * np.pi * 220.0 * t) + 0.05).astype(np.float32)
+    trail_silence = np.zeros(sr * 2, dtype=np.float32)
+    raw = np.concatenate([lead_silence, speech, trail_silence])
+
+    cleaned = prepare_reference_audio(raw, sr, max_duration_s=3.0)
+    # Leading/trailing 2s silence trimmed down to ~2s + 0.1s padding, leaving full speech intact
+    assert 1.9 * sr <= cleaned.shape[0] <= 2.2 * sr
+    # DC offset removed & normalized to ~-1 dBFS (0.891)
+    assert abs(float(np.mean(cleaned))) < 0.02
+    assert 0.85 <= float(np.max(np.abs(cleaned))) <= 0.91
+
+
+def test_voice_engine_defaults_favor_high_clarity() -> None:
+    """Verify maxed-out default Seed-VC parameters stay internally consistent."""
+    settings = EngineSettings()
+    assert settings.voice_diffusion_steps == 30
+    assert settings.voice_cfg_rate == 0.7
+    assert settings.voice_max_prompt_length_s == 15.0
+    assert settings.voice_extra_context_left_s == 5.0
+    assert settings.voice_extra_dit_context_left_s == 2.5
+    assert settings.voice_extra_context_right_s == 0.16
+    assert settings.voice_crossfade_s == 0.08
+    assert settings.voice_block_time_s == 0.40
+    assert settings.voice_vad_hangover_s == 0.5
+    assert settings.voice_vad_threshold_db == -48.0
+
+    session_cfg = AudioSessionConfig()
+    assert session_cfg.diffusion_steps == settings.voice_diffusion_steps
+    assert session_cfg.cfg_rate == settings.voice_cfg_rate
+    assert session_cfg.block_time_s == settings.voice_block_time_s
+    assert session_cfg.vad_threshold_db == settings.voice_vad_threshold_db
+
+
+def test_joyai_detects_fuse_mount_and_disables_mmap_safely(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FUSE/network volumes disable DiT mmap (via temporary SPACE_ID) to avoid multi-hour stalls."""
+    from metamorph_engine.pipelines.video_joyai import (
+        _is_network_or_fuse_path,
+        _should_disable_dit_mmap,
+    )
+
+    mounts = tmp_path / "mounts"
+    mounts.write_text(
+        "/dev/nvme0n1p1 / ext4 rw,relatime 0 0\n"
+        "runpod-global /models fuse.s3fs rw,nosuid,nodev 0 0\n",
+        encoding="utf-8",
+    )
+    assert _is_network_or_fuse_path("/models/checkpoints/dit.pth", mounts_file=str(mounts)) is True
+    assert _is_network_or_fuse_path("/tmp/dit.pth", mounts_file=str(mounts)) is False
+
+    monkeypatch.setenv("RUNPOD_POD_ID", "pod-abc")
+    assert _should_disable_dit_mmap("/models/checkpoints/dit.pth", "auto") is True
+    assert _should_disable_dit_mmap("/models/checkpoints/dit.pth", "false") is False
+    assert _should_disable_dit_mmap("/tmp/dit.pth", "true") is True
+    assert _should_disable_dit_mmap("/tmp/dit.pth", "auto") is False

@@ -87,6 +87,11 @@ class InstanceLifecycleManager:
         """Return True when warmup completed and instance is not shutting down."""
         return self._state not in (LifecycleState.BOOTING, LifecycleState.SHUTTING_DOWN)
 
+    @property
+    def shutdown_reason(self) -> str | None:
+        """Return recorded shutdown reason once shutdown has begun."""
+        return self._shutdown_reason
+
     def disconnect_countdown_remaining_s(self) -> float | None:
         """Return remaining seconds before disconnect-grace shutdown triggers."""
         if self._disconnect_deadline_mono is None or self._state != LifecycleState.DISCONNECT_GRACE:

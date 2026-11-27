@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import importlib
 import io
+import logging
 import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -22,6 +24,73 @@ from metamorph_engine.pipelines.base import (
     VideoSessionConfig,
 )
 from metamorph_engine.protocol import FrameFlags, VideoCodec
+
+logger = logging.getLogger("metamorph_engine.pipelines.video_joyai")
+
+_NETWORK_OR_FUSE_FS_PREFIXES = (
+    "fuse",
+    "nfs",
+    "ceph",
+    "9p",
+    "s3fs",
+    "gcsfuse",
+    "lustre",
+    "glusterfs",
+    "sshfs",
+    "virtiofs",
+    "cifs",
+    "smb",
+)
+
+
+def _is_network_or_fuse_path(path: str | Path, *, mounts_file: str = "/proc/mounts") -> bool:
+    """Return True if `path` resides on a FUSE or network mount where torch mmap crawls."""
+    try:
+        resolved = str(Path(path).resolve())
+    except OSError:
+        resolved = str(path)
+
+    best_mount = ""
+    best_fstype = ""
+    try:
+        with open(mounts_file, encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                mount_point = parts[1].replace("\\040", " ")
+                fstype = parts[2].lower()
+                is_match = (
+                    mount_point == "/"
+                    or resolved == mount_point
+                    or resolved.startswith(mount_point.rstrip("/") + "/")
+                )
+                if is_match and len(mount_point) > len(best_mount):
+                    best_mount = mount_point
+                    best_fstype = fstype
+    except OSError:
+        return False
+
+    return any(
+        best_fstype == prefix or best_fstype.startswith(prefix + ".")
+        for prefix in _NETWORK_OR_FUSE_FS_PREFIXES
+    )
+
+
+def _should_disable_dit_mmap(dit_ckpt: str, setting: str) -> bool:
+    """Decide whether to disable `torch.load(..., mmap=True)` for the 30 GiB DiT checkpoint."""
+    if setting == "true":
+        return True
+    if setting == "false":
+        return False
+    if _is_network_or_fuse_path(dit_ckpt):
+        return True
+    # RunPod global/network volumes mount under /models, /workspace, or /runpod-volume
+    if os.environ.get("RUNPOD_POD_ID"):
+        resolved = str(Path(dit_ckpt))
+        if resolved.startswith(("/models/", "/workspace/", "/runpod-volume/")):
+            return True
+    return False
 
 
 def _decode_jpeg(data: bytes) -> Image.Image:
@@ -220,19 +289,73 @@ class JoyAIVideoPipeline(VideoPipeline):
         dit_ckpt = self.settings.video_dit_ckpt or str(
             ckpt_root / "JoyAI-Video-Edit" / "dit" / "joyai_video_edit_dit_1101_face++.pth"
         )
+        vae_ckpt = self.settings.video_vae_ckpt
+        text_encoder_ckpt = self.settings.video_text_encoder_ckpt
+
+        # Validate explicit checkpoint paths early so missing weights fail fast with a clear error
+        missing: list[str] = []
+        if self.settings.video_dit_ckpt and not Path(dit_ckpt).is_file():
+            missing.append(f"DiT checkpoint ({dit_ckpt})")
+        if vae_ckpt and not Path(vae_ckpt).exists():
+            missing.append(f"VAE checkpoint ({vae_ckpt})")
+        if text_encoder_ckpt and not Path(text_encoder_ckpt).exists():
+            missing.append(f"MiMo-VL text encoder ({text_encoder_ckpt})")
+        if missing:
+            raise FileNotFoundError(
+                "Missing required JoyAI video checkpoints: " + ", ".join(missing)
+            )
 
         if not self.settings.warmup_on_startup:
             os.environ.setdefault("JOYOMNI_SKIP_LOAD_WARMUP", "1")
 
-        runtime = streaming_mod.JoyOmniRuntime.load(
-            dit_ckpt,
-            vae_ckpt=self.settings.video_vae_ckpt,
-            text_encoder_ckpt=self.settings.video_text_encoder_ckpt,
-            device=self.settings.device,
-            seed=self.settings.video_seed,
-            warmup_height=self.settings.video_height,
-            warmup_width=self.settings.video_width,
+        # Snap warmup dimensions to xVAE 24px alignment (stem.stride=3 * 8) so warmup never asserts
+        snap = getattr(serving_mod, "_snap_to_align", None)
+        warmup_h = (
+            snap(self.settings.video_height, 24) if callable(snap) else self.settings.video_height
         )
+        warmup_w = (
+            snap(self.settings.video_width, 24) if callable(snap) else self.settings.video_width
+        )
+
+        # Upstream models.py disables mmap when SPACE_ID is present (mmap on FUSE crawls for hours)
+        disable_mmap = _should_disable_dit_mmap(dit_ckpt, self.settings.video_disable_mmap)
+        had_space_id = "SPACE_ID" in os.environ
+        prev_space_id = os.environ.get("SPACE_ID")
+        if disable_mmap and not had_space_id:
+            os.environ["SPACE_ID"] = "1"
+            logger.info(
+                "Disabling torch.load mmap for JoyAI DiT checkpoint on network/FUSE storage: %s",
+                dit_ckpt,
+            )
+
+        t0 = time.monotonic()
+        logger.info(
+            "Loading JoyAI runtime (dit=%s, warmup=%sx%s, fp8_img=%s, fp8_txt=%s, low_vram=%s)",
+            dit_ckpt,
+            warmup_w,
+            warmup_h,
+            os.environ.get("JOYOMNI_FP8_IMG", ""),
+            os.environ.get("JOYOMNI_FP8_TXT", ""),
+            os.environ.get("JOYOMNI_LOW_VRAM", ""),
+        )
+        try:
+            runtime = streaming_mod.JoyOmniRuntime.load(
+                dit_ckpt,
+                vae_ckpt=vae_ckpt,
+                text_encoder_ckpt=text_encoder_ckpt,
+                device=self.settings.device,
+                seed=self.settings.video_seed,
+                warmup_height=warmup_h,
+                warmup_width=warmup_w,
+            )
+        finally:
+            if disable_mmap and not had_space_id:
+                if prev_space_id is None:
+                    os.environ.pop("SPACE_ID", None)
+                else:
+                    os.environ["SPACE_ID"] = prev_space_id
+
+        logger.info("JoyAI runtime loaded and warmed up in %.1fs", time.monotonic() - t0)
 
         self._modules = _JoyAIModules(
             runtime=runtime,
