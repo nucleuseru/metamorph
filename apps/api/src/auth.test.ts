@@ -16,7 +16,7 @@ import { Context, Layer } from "effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import { Pool } from "pg";
 
-import { createAuth, createDrizzleDatabase } from "./auth.ts";
+import { createAuth, createDrizzleDatabase, isCrossSiteHttps } from "./auth.ts";
 import { schema } from "./db/schema.ts";
 import { AssetRepository, PersonaRepository, UsageRepository } from "./repositories/index.ts";
 import { AppRoutes } from "./server.ts";
@@ -149,5 +149,38 @@ describe("Drizzle schema and Better Auth adapter", () => {
     } finally {
       await pool.end().catch(() => {});
     }
+  });
+
+  test("enables SameSite=None Secure cookies only for cross-site HTTPS deployments", async () => {
+    assert.equal(
+      isCrossSiteHttps("https://d123.cloudfront.net", ["https://app.example.com"]),
+      true,
+    );
+    assert.equal(isCrossSiteHttps("http://localhost:3001", ["http://localhost:3000"]), false);
+    assert.equal(isCrossSiteHttps("https://api.example.com", ["https://api.example.com"]), false);
+
+    const crossSiteAuth = createAuth({
+      database: memoryAdapter({}),
+      secret: "test-secret-test-secret-test-secret-123456",
+      baseUrl: "https://d123.cloudfront.net",
+      trustedOrigins: ["https://app.example.com"],
+      jwtIssuer: "https://d123.cloudfront.net",
+      jwtAudience: "https://d123.cloudfront.net",
+      jwtExpirationTime: "15m",
+    });
+    const crossSiteCookies = crossSiteAuth.options.advanced?.defaultCookieAttributes;
+    assert.equal(crossSiteCookies?.sameSite, "none");
+    assert.equal(crossSiteCookies?.secure, true);
+
+    const localAuth = createAuth({
+      database: memoryAdapter({}),
+      secret: "test-secret-test-secret-test-secret-123456",
+      baseUrl: "http://localhost:3001",
+      trustedOrigins: ["http://localhost:3000"],
+      jwtIssuer: "http://localhost:3001",
+      jwtAudience: "http://localhost:3001",
+      jwtExpirationTime: "15m",
+    });
+    assert.equal(localAuth.options.advanced?.defaultCookieAttributes?.sameSite, undefined);
   });
 });

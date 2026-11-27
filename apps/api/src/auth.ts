@@ -18,6 +18,30 @@ export interface AuthConfig {
   readonly jwtExpirationTime: string;
 }
 
+export function isCrossSiteHttps(baseUrl: string, trustedOrigins: ReadonlyArray<string>): boolean {
+  let baseParsed: URL;
+  try {
+    baseParsed = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  if (baseParsed.protocol !== "https:") {
+    return false;
+  }
+  const baseHost = baseParsed.hostname.toLowerCase();
+  for (const origin of trustedOrigins) {
+    try {
+      const originParsed = new URL(origin);
+      if (originParsed.hostname.toLowerCase() !== baseHost) {
+        return true;
+      }
+    } catch {
+      // ignore malformed origin entries
+    }
+  }
+  return false;
+}
+
 export const createAuth = (config: AuthConfig) =>
   betterAuth({
     appName: "Metamorph",
@@ -26,6 +50,17 @@ export const createAuth = (config: AuthConfig) =>
     secret: config.secret,
     database: config.database,
     trustedOrigins: [...config.trustedOrigins],
+    ...(isCrossSiteHttps(config.baseUrl, config.trustedOrigins)
+      ? {
+          advanced: {
+            useSecureCookies: true,
+            defaultCookieAttributes: {
+              sameSite: "none" as const,
+              secure: true,
+            },
+          },
+        }
+      : {}),
     socialProviders:
       config.googleClientId && config.googleClientSecret
         ? {

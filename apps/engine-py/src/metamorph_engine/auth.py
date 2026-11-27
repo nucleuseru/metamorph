@@ -1,12 +1,13 @@
-"""Asymmetric EdDSA (Ed25519) JWKS-based JWT authentication for HTTP and WebSocket routes."""
+"""EdDSA (Ed25519) SPKI PEM & JWKS-based JWT authentication for HTTP and WebSocket routes."""
 
 from __future__ import annotations
 
 from typing import Annotated, Any
 
 import jwt
+from cryptography.hazmat.primitives import serialization
 from fastapi import Depends, HTTPException, Request
-from jwt.exceptions import InvalidTokenError, PyJWKClientError, PyJWKError
+from jwt.exceptions import InvalidSignatureError, InvalidTokenError, PyJWKClientError, PyJWKError
 from pydantic import BaseModel
 
 from metamorph_engine.config import EngineSettings
@@ -35,8 +36,20 @@ class JWTClaims(BaseModel):
     modalities: tuple[Modality, ...]
 
 
+def _load_static_public_key(raw_pem: str | None) -> Any | None:
+    if not raw_pem:
+        return None
+    normalized = raw_pem.replace("\\n", "\n").strip()
+    if not normalized:
+        return None
+    try:
+        return serialization.load_pem_public_key(normalized.encode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Invalid ENGINE_JWT_PUBLIC_KEY PEM: {exc}") from exc
+
+
 class JWTAuthenticator:
-    """Verifies EdDSA JWTs via JWKS against instance identity, user binding, and modalities."""
+    """Verifies EdDSA JWTs via static public key and/or JWKS."""
 
     def __init__(
         self,
@@ -45,6 +58,7 @@ class JWTAuthenticator:
         jwk_client: jwt.PyJWKClient | None = None,
     ) -> None:
         self._settings = settings
+        self._static_public_key: Any | None = _load_static_public_key(settings.jwt_public_key)
         self._jwk_client: jwt.PyJWKClient | None = jwk_client
         if self._jwk_client is None and settings.jwt_jwks_url:
             self._jwk_client = jwt.PyJWKClient(
@@ -66,12 +80,11 @@ class JWTAuthenticator:
 
     def verify_token(self, token: str) -> JWTClaims:
         """Decode and validate an EdDSA JWT, returning parsed `JWTClaims`."""
-        if self._jwk_client is None:
-            raise AuthError(401, 4001, "JWKS verification is not configured on this instance.")
+        if self._static_public_key is None and self._jwk_client is None:
+            raise AuthError(401, 4001, "JWT verification is not configured on this instance.")
         if not token or not token.strip():
             raise AuthError(401, 4001, "Missing JWT token.")
         token = token.strip()
-        signing_key = self._resolve_signing_key(token)
 
         required = ["sub", "exp"] if self._settings.enforce_token_expiry else ["sub"]
         decode_kwargs: dict[str, Any] = {
@@ -89,10 +102,26 @@ class JWTAuthenticator:
         if self._settings.jwt_issuer:
             decode_kwargs["issuer"] = self._settings.jwt_issuer
 
-        try:
-            payload = jwt.decode(token, key=signing_key, **decode_kwargs)
-        except InvalidTokenError as exc:
-            raise AuthError(401, 4001, f"Invalid JWT: {exc}") from exc
+        payload: dict[str, Any]
+        if self._static_public_key is not None:
+            try:
+                payload = jwt.decode(token, key=self._static_public_key, **decode_kwargs)
+            except InvalidSignatureError as exc:
+                if self._jwk_client is None:
+                    raise AuthError(401, 4001, f"Invalid JWT: {exc}") from exc
+                signing_key = self._resolve_signing_key(token)
+                try:
+                    payload = jwt.decode(token, key=signing_key, **decode_kwargs)
+                except InvalidTokenError as jwks_exc:
+                    raise AuthError(401, 4001, f"Invalid JWT: {jwks_exc}") from jwks_exc
+            except InvalidTokenError as exc:
+                raise AuthError(401, 4001, f"Invalid JWT: {exc}") from exc
+        else:
+            signing_key = self._resolve_signing_key(token)
+            try:
+                payload = jwt.decode(token, key=signing_key, **decode_kwargs)
+            except InvalidTokenError as exc:
+                raise AuthError(401, 4001, f"Invalid JWT: {exc}") from exc
 
         sub = payload.get("sub")
         if not isinstance(sub, str) or not sub.strip():

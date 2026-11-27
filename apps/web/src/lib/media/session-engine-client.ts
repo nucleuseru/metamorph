@@ -155,7 +155,9 @@ export class RealtimeSessionClient {
 
     let token = !opts.isReconnect ? this.session.connection.token : null;
     let tokenExpiresAt = !opts.isReconnect ? this.session.connection.tokenExpiresAt : null;
-    if (!token) {
+    const expiresAtMs = tokenExpiresAt ? Date.parse(tokenExpiresAt) : Number.NaN;
+    const tokenNearExpiry = Number.isNaN(expiresAtMs) || expiresAtMs - Date.now() < 60_000;
+    if (!token || tokenNearExpiry) {
       const minted = await mintSessionToken(this.session.id);
       token = minted.token;
       tokenExpiresAt = minted.expiresAt;
@@ -341,18 +343,21 @@ export class RealtimeSessionClient {
         const hasVideo = this.session.modalities.includes("video");
         const hasVoice = this.session.modalities.includes("voice");
 
-        const refImageUrl =
-          this.initialOverrides.ref_image_url ??
-          (!msg.assets.has_ref_image ? this.session.initialConfig.refImageUrl : null) ??
-          undefined;
-        const refAudioUrl =
-          this.initialOverrides.ref_audio_url ??
-          (!msg.assets.has_ref_audio ? this.session.initialConfig.refAudioUrl : null) ??
-          undefined;
-        const prompt =
-          this.initialOverrides.prompt ??
-          (!msg.assets.has_prompt ? this.session.initialConfig.prompt : null) ??
-          undefined;
+        const refImageUrl = hasVideo
+          ? (this.initialOverrides.ref_image_url ??
+            (!msg.assets.has_ref_image ? this.session.initialConfig.refImageUrl : null) ??
+            undefined)
+          : undefined;
+        const refAudioUrl = hasVoice
+          ? (this.initialOverrides.ref_audio_url ??
+            (!msg.assets.has_ref_audio ? this.session.initialConfig.refAudioUrl : null) ??
+            undefined)
+          : undefined;
+        const prompt = hasVideo
+          ? (this.initialOverrides.prompt ??
+            (!msg.assets.has_prompt ? this.session.initialConfig.prompt : null) ??
+            undefined)
+          : undefined;
 
         this.sendJson({
           type: "start",
@@ -385,7 +390,13 @@ export class RealtimeSessionClient {
       case "started": {
         this.callbacks.onBootstrapUpdate?.(msg.assets);
         this.callbacks.onPhaseChange?.("streaming");
-        void this.startMediaPipelines(msg);
+        void this.startMediaPipelines(msg).catch((err: unknown) => {
+          if (this.intentionalStop) return;
+          this.callbacks.onError?.(
+            err instanceof Error ? err.message : "Failed to start camera or microphone.",
+          );
+          this.callbacks.onPhaseChange?.("error");
+        });
         this.startPingLoop();
         break;
       }

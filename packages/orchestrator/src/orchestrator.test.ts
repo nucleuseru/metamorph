@@ -143,6 +143,23 @@ describe("EngineOrchestrator lifecycle, webhooks, conflicts, and reconciliation"
         const active = yield* orchestrator.handleWebhook("inst-1", bodyBytes, validSig);
         assert.equal(active.status, "active");
 
+        // Late 'ready' webhook must not revert active or disconnect_grace back to ready
+        const lateReadyBytes = new TextEncoder().encode(
+          JSON.stringify({
+            event: "ready",
+            instance_id: "inst-1",
+            timestamp: 123.5,
+            enabled_modalities: ["voice", "video"],
+          }),
+        );
+        const lateReadySig = yield* signWebhookPayload(lateReadyBytes, session.webhookSecret);
+        const stillActive = yield* orchestrator.handleWebhook(
+          "inst-1",
+          lateReadyBytes,
+          lateReadySig,
+        );
+        assert.equal(stillActive.status, "active");
+
         const disconnectBytes = new TextEncoder().encode(
           JSON.stringify({
             event: "disconnected",
@@ -156,6 +173,13 @@ describe("EngineOrchestrator lifecycle, webhooks, conflicts, and reconciliation"
         const discSig = yield* signWebhookPayload(disconnectBytes, session.webhookSecret);
         const graced = yield* orchestrator.handleWebhook("inst-1", disconnectBytes, discSig);
         assert.equal(graced.status, "disconnect_grace");
+
+        const stillGraced = yield* orchestrator.handleWebhook(
+          "inst-1",
+          lateReadyBytes,
+          lateReadySig,
+        );
+        assert.equal(stillGraced.status, "disconnect_grace");
 
         // Shutting down webhook stops & terminates provider pod
         const shutdownBytes = new TextEncoder().encode(

@@ -292,10 +292,16 @@ export class EngineOrchestrator extends Context.Service<
                 .pipe(Effect.result);
               if (readyRes._tag === "Success") {
                 if (readyRes.success.ready && current.wsUrl) {
+                  const fresh = yield* store
+                    .getById(current.id)
+                    .pipe(Effect.orElseSucceed(() => null));
+                  if (!fresh || (fresh.status !== "provisioning" && fresh.status !== "warming")) {
+                    return;
+                  }
                   const readyTimeMs = yield* Clock.currentTimeMillis;
                   const readyAt = new Date(readyTimeMs);
                   const updated = yield* store
-                    .update(current.id, {
+                    .update(fresh.id, {
                       status: "ready",
                       readyAt,
                     })
@@ -521,14 +527,17 @@ export class EngineOrchestrator extends Context.Service<
         const now = new Date(nowMs);
 
         if (event.event === "ready") {
-          const nextStatus =
-            record.status === "active" || record.status === "stopping" ? record.status : "ready";
+          const canTransitionToReady =
+            record.status === "provisioning" || record.status === "warming";
+          if (!canTransitionToReady) {
+            return record;
+          }
           const updated = yield* store.update(record.id, {
-            status: nextStatus,
+            status: "ready",
             readyAt: record.readyAt ?? now,
           });
           const res = updated ?? record;
-          if (res.httpUrl && res.wsUrl && nextStatus === "ready") {
+          if (res.httpUrl && res.wsUrl && res.status === "ready") {
             yield* eventBus.publish({
               type: "session_ready",
               sessionId: res.id,

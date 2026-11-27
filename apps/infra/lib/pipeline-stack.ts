@@ -20,6 +20,16 @@ export class PipelineStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EnvPipelineProps) {
     super(scope, id, props);
 
+    const synthEnv: Record<string, string> = {};
+    if (config.account) synthEnv.CDK_ACCOUNT = config.account;
+    if (config.region) synthEnv.CDK_REGION = config.region;
+    if (config.codeConnectionId) synthEnv.CODE_CONNECTION_ID = config.codeConnectionId;
+    if (config.clientOrigin.development)
+      synthEnv.DEV_CLIENT_ORIGIN = config.clientOrigin.development;
+    if (config.clientOrigin.production)
+      synthEnv.PROD_CLIENT_ORIGIN = config.clientOrigin.production;
+    if (config.alertEmail) synthEnv.ALERT_EMAIL = config.alertEmail;
+
     const pipeline = new CodePipeline(this, `Pipeline-${props.environmentName}`, {
       pipelineName: `Pipeline-${props.environmentName}`,
       codeBuildDefaults: {
@@ -32,6 +42,7 @@ export class PipelineStack extends cdk.Stack {
         input: CodePipelineSource.connection(config.repo, props.branchName, {
           connectionArn: `arn:aws:codeconnections:${config.region}:${config.account}:connection/${config.codeConnectionId}`,
         }),
+        ...(Object.keys(synthEnv).length > 0 ? { env: synthEnv } : {}),
         commands: [
           "corepack enable",
           "pnpm install --frozen-lockfile --filter @metamorph/infra...",

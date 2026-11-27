@@ -8,6 +8,7 @@ on:
       - "engine-v*"
     paths:
       - "apps/engine-py/**"
+      - "apps/engine-py/Dockerfile.dockerignore"
       - "packages/shared-py/**"
       - "pyproject.toml"
       - "uv.lock"
@@ -18,6 +19,7 @@ on:
   pull_request:
     paths:
       - "apps/engine-py/**"
+      - "apps/engine-py/Dockerfile.dockerignore"
       - "packages/shared-py/**"
       - "pyproject.toml"
       - "uv.lock"

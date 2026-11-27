@@ -94,29 +94,54 @@ export const makeSessionControlHandlers = <R>(
             });
           }
 
+          const hasVideo = ready.modalities.includes("video");
+          const hasVoice = ready.modalities.includes("voice");
+
+          const effectiveRefImageAssetId =
+            payload.refImageAssetId !== undefined
+              ? payload.refImageAssetId
+              : hasVideo &&
+                  !payload.clearRefImage &&
+                  payload.refImageUrl === undefined &&
+                  payload.refImageBase64 === undefined
+                ? personaRecord?.refImageAssetId
+                : null;
+          const effectiveRefAudioAssetId =
+            payload.refAudioAssetId !== undefined
+              ? payload.refAudioAssetId
+              : hasVoice &&
+                  payload.refAudioUrl === undefined &&
+                  payload.refAudioBase64 === undefined
+                ? personaRecord?.refAudioAssetId
+                : null;
+
           const [signedImgUrl, signedAudUrl] = yield* Effect.all([
-            resolveSignedAssetUrl(
-              user.id,
-              payload.refImageAssetId ?? personaRecord?.refImageAssetId,
-              "ref_image",
-            ),
-            resolveSignedAssetUrl(
-              user.id,
-              payload.refAudioAssetId ?? personaRecord?.refAudioAssetId,
-              "ref_audio",
-            ),
+            resolveSignedAssetUrl(user.id, effectiveRefImageAssetId, "ref_image"),
+            resolveSignedAssetUrl(user.id, effectiveRefAudioAssetId, "ref_audio"),
           ]);
 
           const patchPrompt =
-            payload.prompt !== undefined ? payload.prompt : (personaRecord?.prompt ?? undefined);
+            payload.prompt !== undefined
+              ? payload.prompt
+              : hasVideo
+                ? (personaRecord?.prompt ?? undefined)
+                : undefined;
           const patchRefImageUrl =
             payload.refImageUrl !== undefined ? payload.refImageUrl : (signedImgUrl ?? undefined);
           const patchRefAudioUrl =
             payload.refAudioUrl !== undefined ? payload.refAudioUrl : (signedAudUrl ?? undefined);
           const patchVideo =
-            payload.video !== undefined ? payload.video : (personaRecord?.videoConfig ?? undefined);
+            payload.video !== undefined
+              ? payload.video
+              : hasVideo
+                ? (personaRecord?.videoConfig ?? undefined)
+                : undefined;
           const patchAudio =
-            payload.audio !== undefined ? payload.audio : (personaRecord?.audioConfig ?? undefined);
+            payload.audio !== undefined
+              ? payload.audio
+              : hasVoice
+                ? (personaRecord?.audioConfig ?? undefined)
+                : undefined;
 
           const patch: SessionConfigPatch = {
             ...(patchPrompt !== undefined ? { prompt: patchPrompt } : {}),

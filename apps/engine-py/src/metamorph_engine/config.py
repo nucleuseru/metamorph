@@ -41,7 +41,8 @@ class EngineSettings(BaseSettings):
     enable_video: bool = True
     backend: Literal["gpu", "mock"] = "gpu"
 
-    # Authentication (EdDSA / Ed25519 JWT via JWKS)
+    # Authentication (EdDSA / Ed25519 JWT via static SPKI PEM and/or JWKS)
+    jwt_public_key: str | None = None
     jwt_jwks_url: str | None = None
     jwt_jwks_cache_ttl_s: int = Field(default=300, ge=1)
     jwt_audience: str | None = None
