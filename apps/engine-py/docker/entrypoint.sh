@@ -75,7 +75,8 @@ if [ "${ENGINE_BACKEND:-gpu}" = "gpu" ] && command -v nvidia-smi >/dev/null 2>&1
                 export JOYOMNI_FP8_FAST_ACCUM="${JOYOMNI_FP8_FAST_ACCUM:-1}"
                 export JOYOMNI_LOW_VRAM="${JOYOMNI_LOW_VRAM:-1}"
                 if [ -z "${JOYOMNI_SAGE_ATTN:-}" ]; then
-                    if python -c "import sageattention" >/dev/null 2>&1; then
+                    if [ "${ENGINE_ENABLE_VIDEO:-true}" = "true" ] \
+                        && python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('sageattention') else 1)" >/dev/null 2>&1; then
                         export JOYOMNI_SAGE_ATTN=1
                     else
                         export JOYOMNI_SAGE_ATTN=0

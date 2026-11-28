@@ -14,6 +14,7 @@ from PIL import Image
 from metamorph_engine.protocol import (
     AudioCodec,
     FrameFlags,
+    ProtocolError,
     VideoCodec,
     VideoCodecName,
 )
@@ -27,9 +28,9 @@ class AudioSessionConfig:
     output_codec: AudioCodec = AudioCodec.PCM_S16LE
     input_sample_rate: int = 22050
     output_sample_rate: int = 22050
-    diffusion_steps: int = 30
+    diffusion_steps: int = 20
     cfg_rate: float = 0.7
-    block_time_s: float = 0.40
+    block_time_s: float = 0.32
     vad_threshold_db: float = -48.0
     passthrough: bool = False
 
@@ -115,6 +116,11 @@ def decode_pcm_bytes(payload: bytes | memoryview, codec: AudioCodec) -> np.ndarr
     """Convert raw PCM16 LE bytes into mono float32 samples in [-1, 1]."""
     if codec != AudioCodec.PCM_S16LE:
         raise ValueError(f"Unsupported audio codec: {codec}")
+    nbytes = memoryview(payload).nbytes
+    if nbytes % 2 != 0:
+        raise ProtocolError(
+            f"Invalid PCM_S16LE payload length ({nbytes} bytes); expected even byte count."
+        )
     arr = np.frombuffer(payload, dtype="<i2").astype(np.float32) / 32768.0
     return np.clip(arr, -1.0, 1.0)
 
@@ -173,6 +179,162 @@ def resample_audio_hq(samples: np.ndarray, orig_sr: int, target_sr: int) -> np.n
     down = orig_sr // divisor
     resampled = scipy_signal.resample_poly(arr, up, down)
     return np.clip(np.asarray(resampled, dtype=np.float32), -1.0, 1.0)
+
+
+def _design_butter4_sos(cutoff_hz: float, sample_rate: int) -> np.ndarray:
+    """Compute normalized 4th-order Butterworth low-pass second-order sections."""
+    nyquist = 0.5 * sample_rate
+    wn = min(max(cutoff_hz / nyquist, 1e-4), 0.99)
+    try:
+        scipy_signal = importlib.import_module("scipy.signal")
+        return np.asarray(
+            scipy_signal.butter(4, wn, btype="low", output="sos"),
+            dtype=np.float64,
+        )
+    except ImportError:
+        pass
+
+    w0 = math.pi * wn
+    cos_w0 = math.cos(w0)
+    sin_w0 = math.sin(w0)
+    sos = np.zeros((2, 6), dtype=np.float64)
+    # Q factors for cascaded 2nd-order sections of a 4th-order Butterworth filter
+    q_factors = (
+        1.0 / (2.0 * math.cos(math.pi / 8.0)),
+        1.0 / (2.0 * math.cos(3.0 * math.pi / 8.0)),
+    )
+    for idx, q_val in enumerate(q_factors):
+        alpha = sin_w0 / (2.0 * q_val)
+        a0 = 1.0 + alpha
+        b0 = ((1.0 - cos_w0) * 0.5) / a0
+        b1 = (1.0 - cos_w0) / a0
+        sos[idx] = (b0, b1, b0, 1.0, (-2.0 * cos_w0) / a0, (1.0 - alpha) / a0)
+    return sos
+
+
+class StatefulAudioResampler:
+    """Phase-continuous streaming resampler with stateful anti-alias / anti-imaging LPF."""
+
+    def __init__(self, orig_sr: int, target_sr: int) -> None:
+        if orig_sr <= 0 or target_sr <= 0:
+            raise ValueError(f"Sample rates must be positive, got {orig_sr} -> {target_sr}")
+        self.orig_sr = orig_sr
+        self.target_sr = target_sr
+        self._step = orig_sr / target_sr
+        self._filter_pre = orig_sr > target_sr
+        self._sos: np.ndarray | None = None
+        self._zi: np.ndarray | None = None
+        if orig_sr != target_sr:
+            filter_sr = orig_sr if self._filter_pre else target_sr
+            cutoff = 0.45 * min(orig_sr, target_sr)
+            self._sos = _design_butter4_sos(cutoff, filter_sr)
+            self._zi = np.zeros((self._sos.shape[0], 2), dtype=np.float64)
+            try:
+                self._scipy_signal: Any | None = importlib.import_module("scipy.signal")
+            except ImportError:
+                self._scipy_signal = None
+        else:
+            self._scipy_signal = None
+        self._tail = np.zeros(0, dtype=np.float32)
+        self._phase = 1.0
+        self._started = False
+
+    def reset(self) -> None:
+        """Reset continuity and filter state for a new stream."""
+        if self._sos is not None:
+            self._zi = np.zeros((self._sos.shape[0], 2), dtype=np.float64)
+        self._tail = np.zeros(0, dtype=np.float32)
+        self._phase = 1.0
+        self._started = False
+
+    def _apply_lpf(self, samples: np.ndarray) -> np.ndarray:
+        if self._sos is None or self._zi is None or samples.size == 0:
+            return samples
+        if self._scipy_signal is not None:
+            y, zi = self._scipy_signal.sosfilt(
+                self._sos,
+                samples.astype(np.float64, copy=False),
+                zi=self._zi,
+            )
+            self._zi = np.asarray(zi, dtype=np.float64)
+            return np.asarray(y, dtype=np.float32)
+
+        x = samples.astype(np.float64, copy=False)
+        for stage in range(self._sos.shape[0]):
+            b0, b1, b2, _a0, a1, a2 = self._sos[stage]
+            z1 = float(self._zi[stage, 0])
+            z2 = float(self._zi[stage, 1])
+            y = np.empty_like(x)
+            for i in range(x.shape[0]):
+                xi = float(x[i])
+                yi = b0 * xi + z1
+                z1 = b1 * xi - a1 * yi + z2
+                z2 = b2 * xi - a2 * yi
+                y[i] = yi
+            self._zi[stage, 0] = z1
+            self._zi[stage, 1] = z2
+            x = y
+        return x.astype(np.float32)
+
+    def _interpolate_continuous(self, samples: np.ndarray) -> np.ndarray:
+        if samples.size == 0:
+            return np.zeros(0, dtype=np.float32)
+        if not self._started:
+            self._tail = np.array([samples[0]], dtype=np.float32)
+            self._phase = 1.0
+            self._started = True
+
+        buf = np.concatenate((self._tail, samples))
+        limit = buf.size - 2
+        if limit <= 1 or self._phase >= limit:
+            consume = min(buf.size, max(0, math.floor(self._phase) - 1))
+            self._tail = buf[consume:].copy()
+            self._phase -= consume
+            return np.zeros(0, dtype=np.float32)
+
+        count = max(0, math.floor((limit - self._phase) / self._step) + 1)
+        while count > 0 and self._phase + (count - 1) * self._step >= limit:
+            count -= 1
+        while self._phase + count * self._step < limit:
+            count += 1
+
+        if count == 0:
+            consume = min(buf.size, max(0, math.floor(self._phase) - 1))
+            self._tail = buf[consume:].copy()
+            self._phase -= consume
+            return np.zeros(0, dtype=np.float32)
+
+        positions = self._phase + np.arange(count, dtype=np.float64) * self._step
+        i0 = np.floor(positions).astype(np.int64)
+        u = (positions - i0).astype(np.float32)
+        p0 = buf[i0 - 1]
+        p1 = buf[i0]
+        p2 = buf[i0 + 1]
+        p3 = buf[i0 + 2]
+        u2 = u * u
+        u3 = u2 * u
+        out = 0.5 * (
+            (2.0 * p1)
+            + (-p0 + p2) * u
+            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * u2
+            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * u3
+        )
+        next_pos = self._phase + count * self._step
+        consume = min(buf.size, max(0, math.floor(next_pos) - 1))
+        self._tail = buf[consume:].copy()
+        self._phase = next_pos - consume
+        return np.clip(out.astype(np.float32, copy=False), -1.0, 1.0)
+
+    def process(self, samples: np.ndarray) -> np.ndarray:
+        """Resample one sequential chunk while preserving phase and filter state."""
+        arr = np.asarray(samples, dtype=np.float32)
+        if self.orig_sr == self.target_sr or arr.size == 0:
+            return arr
+        if self._filter_pre:
+            filtered = self._apply_lpf(arr)
+            return self._interpolate_continuous(filtered)
+        upsampled = self._interpolate_continuous(arr)
+        return np.clip(self._apply_lpf(upsampled), -1.0, 1.0)
 
 
 def prepare_reference_audio(

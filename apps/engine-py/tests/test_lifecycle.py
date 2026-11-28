@@ -172,11 +172,10 @@ def test_single_user_takeover_closes_stale_socket_without_disconnect_countdown(
     assert event_names.count("disconnected") == 1
 
 
-@pytest.mark.asyncio
-async def test_explicit_http_shutdown_triggers_teardown(
+def test_explicit_http_shutdown_triggers_teardown(
     jwks_signer: Ed25519PrivateKey,
 ) -> None:
-    shutdown_event = asyncio.Event()
+    shutdown_event = threading.Event()
 
     def _on_shutdown() -> None:
         shutdown_event.set()
@@ -192,7 +191,7 @@ async def test_explicit_http_shutdown_triggers_teardown(
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "shutting_down"
-        time.sleep(0.1)
+        assert shutdown_event.wait(timeout=2.0) is True
         assert app.state.lifecycle.state == LifecycleState.SHUTTING_DOWN
 
 

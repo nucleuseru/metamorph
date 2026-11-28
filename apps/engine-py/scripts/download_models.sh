@@ -10,6 +10,7 @@ DRY_RUN=0
 PRUNE_XLSR=1
 REMOVE_UNPRUNED_XLSR=0
 OPTIMIZE_VOICE_CKPTS=0
+SKIP_CAMPPLUS=0
 
 usage() {
     cat <<'EOF'
@@ -26,6 +27,7 @@ Options:
   --no-prune-xlsr         Skip offline XLSR pruning
   --remove-unpruned-xlsr  Delete the unpruned 24-layer fp32 XLSR directory after pruning
   --optimize-voice-ckpts  Strip non-inference training keys from Seed-VC DiT checkpoint (preserves float32 weights)
+  --skip-campplus         Skip downloading campplus_cn_common.bin (already vendored in vendor/seed-vc)
   --force                 Re-download even if destination files already exist
   --dry-run               Print download actions without executing
   -h, --help              Show this help
@@ -42,6 +44,7 @@ while [ "$#" -gt 0 ]; do
         --no-prune-xlsr) PRUNE_XLSR=0; shift ;;
         --remove-unpruned-xlsr) REMOVE_UNPRUNED_XLSR=1; shift ;;
         --optimize-voice-ckpts) OPTIMIZE_VOICE_CKPTS=1; shift ;;
+        --skip-campplus) SKIP_CAMPPLUS=1; shift ;;
         --force) FORCE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -77,9 +80,13 @@ hf_download_file() {
     local repo="$1"
     local filename="$2"
     local local_dir="$3"
+    local force_py="False"
+    if [ "$FORCE" = "1" ]; then
+        force_py="True"
+    fi
     run_or_echo "$PYTHON_BIN" -c "
 from huggingface_hub import hf_hub_download
-hf_hub_download(repo_id='$repo', filename='$filename', local_dir='$local_dir')
+hf_hub_download(repo_id='$repo', filename='$filename', local_dir='$local_dir', force_download=$force_py)
 "
 }
 
@@ -88,10 +95,14 @@ hf_download_repo() {
     local local_dir="$2"
     local revision="${3:-}"
     local include_json="${4:-}"
+    local force_py="False"
+    if [ "$FORCE" = "1" ]; then
+        force_py="True"
+    fi
     run_or_echo "$PYTHON_BIN" -c "
 import json
 from huggingface_hub import snapshot_download
-kw = {'repo_id': '$repo', 'local_dir': '$local_dir'}
+kw = {'repo_id': '$repo', 'local_dir': '$local_dir', 'force_download': $force_py}
 rev = '$revision'
 if rev:
     kw['revision'] = rev
@@ -114,11 +125,17 @@ if [ "$WANT_VOICE" = "1" ]; then
     fi
     hf_download_file "Plachta/Seed-VC" "DiT_uvit_tat_xlsr_ema.pth" "$SEEDVC_CACHE"
     hf_download_file "FunAudioLLM/CosyVoice-300M" "hift.pt" "$SEEDVC_CACHE"
-    hf_download_file "funasr/campplus" "campplus_cn_common.bin" "$SEEDVC_CACHE"
+    if [ "$SKIP_CAMPPLUS" = "0" ]; then
+        hf_download_file "funasr/campplus" "campplus_cn_common.bin" "$SEEDVC_CACHE"
+    fi
     # Pre-cache XLSR feature extractor and encoder weights as flat files (FUSE/global-volume safe)
     XLSR_RAW_DIR="$SEEDVC_CACHE/facebook__wav2vec2-xls-r-300m"
     XLSR_PRUNED_DIR="$SEEDVC_CACHE/facebook__wav2vec2-xls-r-300m-l12-fp16"
-    hf_download_repo "facebook/wav2vec2-xls-r-300m" "$XLSR_RAW_DIR" "" '["config.json", "preprocessor_config.json", "pytorch_model.bin", "model.safetensors"]'
+    if [ "$PRUNE_XLSR" = "1" ] && [ "$FORCE" = "0" ] && [ -f "$XLSR_PRUNED_DIR/model.safetensors" ]; then
+        echo "[download_models] Pruned XLSR checkpoint already present at $XLSR_PRUNED_DIR (skipping raw download)"
+    else
+        hf_download_repo "facebook/wav2vec2-xls-r-300m" "$XLSR_RAW_DIR" "" '["config.json", "preprocessor_config.json", "pytorch_model.bin", "model.safetensors"]'
+    fi
 
     if [ "$PRUNE_XLSR" = "1" ]; then
         prune_args=(--src "$XLSR_RAW_DIR" --dest "$XLSR_PRUNED_DIR" --layers 12 --dtype float16)

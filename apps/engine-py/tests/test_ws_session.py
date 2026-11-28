@@ -84,8 +84,8 @@ def test_voice_only_pod_streams_and_hot_swaps_reference_audio(
             assert started["voice_active"] is True
             assert started["video_active"] is False
 
-            # Send 400ms (20 * 441 = 8820 samples) voiced PCM chunk matching 20ms semantic hop
-            voiced = make_pcm16_chunk(freq_hz=440.0, duration_s=0.40, sr=22050, amplitude=0.6)
+            # Send 320ms (16 * 441 = 7056 samples) voiced PCM chunk matching 20ms semantic hop
+            voiced = make_pcm16_chunk(freq_hz=440.0, duration_s=0.32, sr=22050, amplitude=0.6)
             ws.send_bytes(
                 pack_frame(Track.AUDIO, AudioCodec.PCM_S16LE, seq=1, pts_us=200_000, payload=voiced)
             )
@@ -96,18 +96,37 @@ def test_voice_only_pod_streams_and_hot_swaps_reference_audio(
             assert hdr.flags & FrameFlags.SPEECH_ACTIVE
             assert len(payload) == len(voiced)
 
-            # Send silent chunks past 0.5s hangover -> VAD marks SILENCE
-            silent = b"\x00\x00" * 8820
+            # Send silent chunks past 0.5s hangover (0.32s * 3 = 0.96s) -> VAD marks SILENCE
+            silent = b"\x00\x00" * 7056
             ws.send_bytes(
                 pack_frame(Track.AUDIO, AudioCodec.PCM_S16LE, seq=2, pts_us=900_000, payload=silent)
             )
             ws.send_bytes(
                 pack_frame(
-                    Track.AUDIO, AudioCodec.PCM_S16LE, seq=3, pts_us=1_300_000, payload=silent
+                    Track.AUDIO, AudioCodec.PCM_S16LE, seq=3, pts_us=1_220_000, payload=silent
                 )
             )
-            frames2, _ = _receive_binary_until(ws, count=2)
+            ws.send_bytes(
+                pack_frame(
+                    Track.AUDIO, AudioCodec.PCM_S16LE, seq=4, pts_us=1_540_000, payload=silent
+                )
+            )
+            frames2, _ = _receive_binary_until(ws, count=3)
             assert frames2[-1][0].flags & FrameFlags.SILENCE
+
+            # Odd-byte PCM payload emits protocol_error JSON without dropping WS session
+            ws.send_bytes(
+                pack_frame(
+                    Track.AUDIO,
+                    AudioCodec.PCM_S16LE,
+                    seq=5,
+                    pts_us=1_860_000,
+                    payload=b"\x01",
+                )
+            )
+            odd_err = ws.receive_json()
+            assert odd_err["type"] == "error"
+            assert odd_err["code"] == "protocol_error"
 
             # Attempting to send video frame on voice-only instance returns clean JSON error
             ws.send_bytes(
@@ -282,7 +301,7 @@ def test_dual_modality_hybrid_bootstrap_and_synced_stream(
             assert pong["t"] == 1234.5
 
             # Stream interleaved video + audio frames
-            pcm_s16 = make_pcm16_chunk(freq_hz=440.0, duration_s=0.40, sr=22050, amplitude=0.5)
+            pcm_s16 = make_pcm16_chunk(freq_hz=440.0, duration_s=0.32, sr=22050, amplitude=0.5)
             mjpeg_frame = make_jpeg_bytes(width=64, height=48, color=(120, 80, 200))
 
             ws.send_bytes(
@@ -321,3 +340,159 @@ def test_dual_modality_hybrid_bootstrap_and_synced_stream(
                     stopped = True
                     break
             assert stopped is True
+
+
+def test_live_hotswap_sets_ref_audio_once_and_start_skips_redundant_hotswap(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
+    settings = build_test_settings(enable_voice=True, enable_video=False)
+    app = create_app(settings)
+    token = mint_jwt(jwks_signer, modalities=["voice"])
+    ref_wav = make_wav_bytes(freq_hz=330.0, duration_s=0.25, sr=22050)
+    ref_b64 = base64.b64encode(ref_wav).decode("ascii")
+
+    with TestClient(app) as client:
+        manager = app.state.session_manager
+        voice_pipe = manager.voice_pipeline
+        assert voice_pipe is not None
+
+        set_ref_calls: list[int] = []
+        orig_set_ref = voice_pipe.set_reference_audio
+
+        def _spy_set_ref(audio_f32, sr: int) -> None:
+            set_ref_calls.append(sr)
+            orig_set_ref(audio_f32, sr)
+
+        voice_pipe.set_reference_audio = _spy_set_ref
+
+        with client.websocket_connect("/ws/session") as ws:
+            ws.send_json({"type": "auth", "token": token})
+            assert ws.receive_json()["type"] == "auth_ok"
+
+            ws.send_json(
+                {
+                    "type": "start",
+                    "audio": {
+                        "enabled": True,
+                        "input_codec": "pcm_s16le",
+                        "output_codec": "pcm_s16le",
+                    },
+                }
+            )
+            assert ws.receive_json()["type"] == "started"
+            assert set_ref_calls == []
+
+            # Live hot-swap via HTTP must update reference audio exactly once
+            resp = client.post(
+                "/session/config",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"ref_audio_base64": ref_b64},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["hot_swapped"] is True
+            assert len(set_ref_calls) == 1
+
+            # Issuing start again must NOT hot-swap the old stream before tearing it down
+            old_stream = manager.active_stream
+            assert old_stream is not None
+            old_hotswap_calls = 0
+            orig_hot_swap = old_stream.hot_swap
+
+            async def _spy_old_hot_swap(**kwargs) -> None:
+                nonlocal old_hotswap_calls
+                old_hotswap_calls += 1
+                await orig_hot_swap(**kwargs)
+
+            old_stream.hot_swap = _spy_old_hot_swap
+            ws.send_json(
+                {
+                    "type": "start",
+                    "ref_audio_base64": ref_b64,
+                    "audio": {
+                        "enabled": True,
+                        "input_codec": "pcm_s16le",
+                        "output_codec": "pcm_s16le",
+                    },
+                }
+            )
+            assert ws.receive_json()["type"] == "started"
+            assert old_hotswap_calls == 0
+            # Re-staging during start runs once on the pipeline
+            assert len(set_ref_calls) == 2
+
+
+def test_partial_config_patches_preserve_earlier_overrides(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
+    settings = build_test_settings(enable_voice=True, enable_video=True)
+    app = create_app(settings)
+    token = mint_jwt(jwks_signer, modalities=["voice", "video"])
+
+    with TestClient(app) as client:
+        r1 = client.post(
+            "/session/config",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "video": {"enabled": True, "width": 1280, "height": 720},
+                "audio": {"enabled": True, "input_sample_rate": 48000, "diffusion_steps": 24},
+            },
+        )
+        assert r1.status_code == 200
+
+        # Subsequent partial patch must not clobber width/height or input_sample_rate
+        r2 = client.post(
+            "/session/config",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "video": {"fps": 30},
+                "audio": {"cfg_rate": 0.45},
+            },
+        )
+        assert r2.status_code == 200
+
+        with client.websocket_connect("/ws/session") as ws:
+            ws.send_json({"type": "auth", "token": token})
+            assert ws.receive_json()["type"] == "auth_ok"
+            ws.send_json({"type": "start"})
+            assert ws.receive_json()["type"] == "started"
+
+            stream = app.state.session_manager.active_stream
+            assert stream is not None
+            assert stream.video_config is not None
+            assert stream.video_config.width == 1280
+            assert stream.video_config.height == 720
+            assert stream.video_config.fps == 30
+            assert stream.voice_config is not None
+            assert stream.voice_config.input_sample_rate == 48000
+            assert stream.voice_config.diffusion_steps == 24
+            assert stream.voice_config.cfg_rate == 0.45
+
+
+def test_oversized_multipart_asset_upload_returns_422(
+    jwks_signer: Ed25519PrivateKey,
+) -> None:
+    settings = build_test_settings(
+        enable_voice=True,
+        enable_video=True,
+        max_ref_image_bytes=1024,
+        max_ref_audio_bytes=1024,
+    )
+    app = create_app(settings)
+    token = mint_jwt(jwks_signer, modalities=["voice", "video"])
+
+    with TestClient(app) as client:
+        resp_img = client.post(
+            "/session/assets",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"ref_image": ("big.jpg", b"x" * 2048, "image/jpeg")},
+        )
+        assert resp_img.status_code == 422
+        assert "max allowed size" in resp_img.json()["detail"]
+
+        resp_aud = client.post(
+            "/session/assets",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"ref_audio": ("big.wav", b"y" * 2048, "audio/wav")},
+        )
+        assert resp_aud.status_code == 422
+        assert "max allowed size" in resp_aud.json()["detail"]

@@ -25,6 +25,7 @@ from metamorph_engine.pipelines.base import (
     AudioChunkOut,
     AudioSessionConfig,
     RmsHangoverVad,
+    StatefulAudioResampler,
     VoicePipeline,
     VoiceSession,
     encode_pcm_bytes,
@@ -158,9 +159,9 @@ def _is_remote_or_runpod_volume(path: str | Path) -> bool:
 
 
 def _call_from_pretrained(fn: Any, source: str, **kwargs: Any) -> Any:
-    """Invoke `from_pretrained` with progressive kwarg fallback for older transformers / stubs."""
+    """Invoke `from_pretrained` with progressive kwarg fallback across versions and stubs."""
     active = {k: v for k, v in kwargs.items() if v is not None}
-    drop_order = ("disable_mmap", "torch_dtype", "local_files_only")
+    drop_order = ("dtype", "torch_dtype", "local_files_only")
     while True:
         try:
             return fn(source, **active)
@@ -175,6 +176,18 @@ def _call_from_pretrained(fn: Any, source: str, **kwargs: Any) -> Any:
                 raise
 
 
+def _transformers_dtype_kwargs(transformers_mod: Any, torch_dtype: Any | None) -> dict[str, Any]:
+    if torch_dtype is None:
+        return {}
+    ver_str = getattr(transformers_mod, "__version__", "")
+    ver_major = 0
+    if isinstance(ver_str, str) and ver_str:
+        with contextlib.suppress(ValueError):
+            ver_major = int(ver_str.split(".", 1)[0])
+    key = "dtype" if ver_major >= 5 else "torch_dtype"
+    return {key: torch_dtype}
+
+
 def _load_xlsr_model(
     transformers_mod: Any,
     hf_hub: Any,
@@ -185,6 +198,8 @@ def _load_xlsr_model(
     torch_dtype: Any | None = None,
 ) -> tuple[Any, Any]:
     """Load XLSR feature extractor and encoder using local short-circuit + pruned fp16 support."""
+    from metamorph_engine.pipelines.video_joyai import _patch_fuse_safetensors_loaders
+
     slug = model_name.replace("/", "__")
     pruned_dir = Path(cache_dir) / f"{slug}-l{output_layer}-fp16" if output_layer else None
     standard_dir = Path(cache_dir) / slug
@@ -219,20 +234,24 @@ def _load_xlsr_model(
                     local_only = True
 
     disable_mmap = local_only and _is_remote_or_runpod_volume(source)
+    dtype_kw = _transformers_dtype_kwargs(transformers_mod, torch_dtype)
 
     try:
-        feat_ext = _call_from_pretrained(
-            transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained,
-            source,
-            local_files_only=True if local_only else None,
-        )
-        w2v = _call_from_pretrained(
-            transformers_mod.Wav2Vec2Model.from_pretrained,
-            source,
-            local_files_only=True if local_only else None,
-            torch_dtype=torch_dtype,
-            disable_mmap=True if disable_mmap else None,
-        )
+        with _patch_fuse_safetensors_loaders(
+            disable_mmap=disable_mmap,
+            mmap_setting="true" if disable_mmap else "false",
+        ):
+            feat_ext = _call_from_pretrained(
+                transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained,
+                source,
+                local_files_only=True if local_only else None,
+            )
+            w2v = _call_from_pretrained(
+                transformers_mod.Wav2Vec2Model.from_pretrained,
+                source,
+                local_files_only=True if local_only else None,
+                **dtype_kw,
+            )
         return feat_ext, w2v
     except (EOFError, RuntimeError, OSError) as first_exc:
         logger.warning(
@@ -267,7 +286,7 @@ def _load_xlsr_model(
                     transformers_mod.Wav2Vec2Model.from_pretrained,
                     str(local_tmp),
                     local_files_only=True,
-                    torch_dtype=torch_dtype,
+                    **dtype_kw,
                 )
                 return feat_ext, w2v
             feat_ext = transformers_mod.Wav2Vec2FeatureExtractor.from_pretrained(
@@ -290,7 +309,7 @@ def _ensure_dac_importable() -> None:
     import time even though `config_dit_mel_seed_uvit_xlsr_tiny.yml` keeps
     `vector_quantize: false` and never instantiates it.
     """
-    if importlib.util.find_spec("dac") is not None or "dac.nn.quantize" in sys.modules:
+    if "dac.nn.quantize" in sys.modules or importlib.util.find_spec("dac") is not None:
         return
 
     dac_mod: Any = types.ModuleType("dac")
@@ -370,7 +389,7 @@ def _ensure_librosa_importable() -> None:
     shimming it in pure NumPy avoids pulling `librosa`, `numba`, and `llvmlite`
     into slim voice images.
     """
-    if importlib.util.find_spec("librosa") is not None or "librosa.filters" in sys.modules:
+    if "librosa.filters" in sys.modules or importlib.util.find_spec("librosa") is not None:
         return
 
     librosa_mod: Any = types.ModuleType("librosa")
@@ -495,9 +514,9 @@ class SeedVCVoiceSession(VoiceSession):
         self._out_seq = 0
         self._pending_in = np.zeros(0, dtype=np.float32)
         self._pending_start_pts_us: int | None = None
-        self._resampler_in: Any | None = None
+        self._resampler_in: StatefulAudioResampler | None = None
         self._resampler_in_sr: int | None = None
-        self._resampler_out: Any | None = None
+        self._resampler_out: StatefulAudioResampler | None = None
         self._resampler_out_sr: int | None = None
         self._resampler_16k: Any | None = (
             self._loaded.torchaudio.transforms.Resample(
@@ -574,36 +593,19 @@ class SeedVCVoiceSession(VoiceSession):
     def _resample_incoming(self, samples: np.ndarray, input_sr: int) -> np.ndarray:
         if input_sr == self._sr or samples.size == 0:
             return samples
-        if self._loaded.torchaudio is not None:
-            if self._resampler_in is None or self._resampler_in_sr != input_sr:
-                self._resampler_in = self._loaded.torchaudio.transforms.Resample(
-                    orig_freq=input_sr,
-                    new_freq=self._sr,
-                    dtype=self._torch.float32,
-                ).to(self._loaded.device)
-                self._resampler_in_sr = input_sr
-            with self._torch.inference_mode():
-                t = self._torch.from_numpy(samples).to(self._loaded.device)
-                return self._resampler_in(t).detach().cpu().numpy().astype(np.float32)
-        return resample_audio_hq(samples, input_sr, self._sr)
+        if self._resampler_in is None or self._resampler_in_sr != input_sr:
+            self._resampler_in = StatefulAudioResampler(input_sr, self._sr)
+            self._resampler_in_sr = input_sr
+        return self._resampler_in.process(samples)
 
     def _resample_outgoing(self, tensor: Any, output_sr: int) -> np.ndarray:
-        if output_sr == self._sr:
-            return tensor.detach().cpu().numpy().astype(np.float32)
-        if self._loaded.torchaudio is not None:
-            if self._resampler_out is None or self._resampler_out_sr != output_sr:
-                self._resampler_out = self._loaded.torchaudio.transforms.Resample(
-                    orig_freq=self._sr,
-                    new_freq=output_sr,
-                    dtype=self._torch.float32,
-                ).to(self._loaded.device)
-                self._resampler_out_sr = output_sr
-            return self._resampler_out(tensor).detach().cpu().numpy().astype(np.float32)
-        return resample_audio_hq(
-            tensor.detach().cpu().numpy().astype(np.float32),
-            self._sr,
-            output_sr,
-        )
+        audio = tensor.detach().cpu().numpy().astype(np.float32)
+        if output_sr == self._sr or audio.size == 0:
+            return audio
+        if self._resampler_out is None or self._resampler_out_sr != output_sr:
+            self._resampler_out = StatefulAudioResampler(self._sr, output_sr)
+            self._resampler_out_sr = output_sr
+        return self._resampler_out.process(audio)
 
     def _check_speech(self, block_model_sr: np.ndarray) -> bool:
         if self._pipeline.settings.voice_vad_backend == "none":
@@ -801,7 +803,9 @@ class SeedVCVoicePipeline(VoicePipeline):
             dtype = torch.float16
         else:
             dtype = (
-                torch.float16 if self.settings.dtype in ("float16", "bfloat16") else torch.float32
+                torch.float16
+                if (device.type == "cuda" and self.settings.dtype in ("float16", "bfloat16"))
+                else torch.float32
             )
         if device.type == "cuda":
             self.cuda_stream = torch.cuda.Stream(device=device)
@@ -939,6 +943,10 @@ class SeedVCVoicePipeline(VoicePipeline):
             hift_state = _load_hift_state()
             feat_ext, w2v = _load_xlsr_pair()
 
+        fm_mod: Any = sys.modules.get("modules.flow_matching")
+        if fm_mod is not None and hasattr(fm_mod, "tqdm"):
+            fm_mod.tqdm = lambda it, *_a, **_kw: it
+
         _load_seedvc_state_dict(model, _cast_state_to_float32(dit_state, torch))
         for key in model:
             model[key].eval()
@@ -954,21 +962,28 @@ class SeedVCVoicePipeline(VoicePipeline):
         hift_gen = _to_device_float32(hift_gen, device)
         vocoder_fn = hift_gen
 
+        w2v_dtype = xlsr_dtype if xlsr_dtype is not None else torch.float32
         if len(w2v.encoder.layers) > output_layer:
             w2v.encoder.layers = w2v.encoder.layers[:output_layer]
-        w2v = w2v.to(device).eval().half()
+        w2v = w2v.to(device).eval()
+        if w2v_dtype == torch.float16:
+            w2v = w2v.half()
+
+        do_normalize = bool(getattr(feat_ext, "do_normalize", True))
+
+        def _normalize_xlsr_wave(waves: Any) -> Any:
+            x = waves.float()
+            if not do_normalize:
+                return x
+            mean = x.mean(dim=-1, keepdim=True)
+            var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
+            return (x - mean) / torch.sqrt(var + 1e-7)
 
         def semantic_fn(waves_16k: Any) -> Any:
-            inputs_list = [waves_16k[idx].cpu().numpy() for idx in range(len(waves_16k))]
-            inputs = feat_ext(
-                inputs_list,
-                return_tensors="pt",
-                return_attention_mask=True,
-                padding=True,
-                sampling_rate=16000,
-            ).to(device)
+            normalized = _normalize_xlsr_wave(waves_16k)
+            inp = normalized.half() if w2v_dtype == torch.float16 else normalized
             with torch.no_grad():
-                outputs = w2v(inputs.input_values.half())
+                outputs = w2v(inp)
             return outputs.last_hidden_state.float()
 
         spect_cfg = config["preprocess_params"]["spect_params"]
@@ -1012,6 +1027,8 @@ class SeedVCVoicePipeline(VoicePipeline):
             self.set_reference_audio(dummy_ref, sr)
             sess = self.create_session(
                 AudioSessionConfig(
+                    input_sample_rate=sr,
+                    output_sample_rate=sr,
                     diffusion_steps=warmup_steps,
                     cfg_rate=self.settings.voice_cfg_rate,
                     block_time_s=self.settings.voice_block_time_s,
@@ -1052,7 +1069,12 @@ class SeedVCVoicePipeline(VoicePipeline):
         )
         max_samples = int(sr * max_prompt_s)
 
-        with self.infer_lock, torch.inference_mode():
+        stream_ctx = (
+            torch.cuda.stream(self.cuda_stream)
+            if self.cuda_stream is not None
+            else contextlib.nullcontext()
+        )
+        with self.infer_lock, torch.inference_mode(), stream_ctx:
             if sample_rate == sr:
                 ref_tensor = torch.from_numpy(
                     np.asarray(cleaned_ref[:max_samples], dtype=np.float32)

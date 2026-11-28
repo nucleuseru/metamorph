@@ -444,8 +444,8 @@ class EngineSessionManager:
         self._has_custom_prompt: bool = bool(settings.initial_prompt)
         self._staged_ref_image: Image.Image | None = None
         self._staged_ref_audio: np.ndarray | None = None
-        self._staged_video_override: VideoStartConfig | None = None
-        self._staged_audio_override: AudioStartConfig | None = None
+        self._staged_video_updates: dict[str, Any] = {}
+        self._staged_audio_updates: dict[str, Any] = {}
 
         self._lock = asyncio.Lock()
         self._active_stream: ActiveStreamSession | None = None
@@ -530,6 +530,14 @@ class EngineSessionManager:
             video_hold_ms=0.0,
         )
 
+    @staticmethod
+    def _extract_patch_updates(cfg: VideoStartConfig | AudioStartConfig) -> dict[str, Any]:
+        return {
+            name: getattr(cfg, name)
+            for name in cfg.model_fields_set
+            if name != "enabled" and getattr(cfg, name) is not None
+        }
+
     def _build_video_config(self, override: VideoStartConfig | None) -> VideoSessionConfig:
         base = VideoSessionConfig(
             prompt=self._staged_prompt,
@@ -543,11 +551,12 @@ class EngineSessionManager:
             static_diff_thresh=self._settings.video_static_diff_thresh,
             max_temporal_ids=self._settings.video_max_temporal_ids,
         )
-        for cfg in (self._staged_video_override, override):
-            if cfg is None:
-                continue
-            updates = cfg.model_dump(exclude_none=True, exclude={"enabled"})
-            base = replace(base, **updates)
+        if self._staged_video_updates:
+            base = replace(base, **self._staged_video_updates)
+        if override is not None:
+            updates = self._extract_patch_updates(override)
+            if updates:
+                base = replace(base, **updates)
         return base
 
     def _build_audio_config(self, override: AudioStartConfig | None) -> AudioSessionConfig:
@@ -559,15 +568,15 @@ class EngineSessionManager:
             block_time_s=self._settings.voice_block_time_s,
             vad_threshold_db=self._settings.voice_vad_threshold_db,
         )
-        for cfg in (self._staged_audio_override, override):
-            if cfg is None:
-                continue
-            updates = cfg.model_dump(exclude_none=True, exclude={"enabled"})
-            if "input_codec" in updates:
-                updates["input_codec"] = audio_codec_from_name(updates["input_codec"])
-            if "output_codec" in updates:
-                updates["output_codec"] = audio_codec_from_name(updates["output_codec"])
-            base = replace(base, **updates)
+        merged: dict[str, Any] = dict(self._staged_audio_updates)
+        if override is not None:
+            merged.update(self._extract_patch_updates(override))
+        if merged:
+            if "input_codec" in merged:
+                merged["input_codec"] = audio_codec_from_name(merged["input_codec"])
+            if "output_codec" in merged:
+                merged["output_codec"] = audio_codec_from_name(merged["output_codec"])
+            base = replace(base, **merged)
         return base
 
     async def apply_config_patch(
@@ -577,6 +586,7 @@ class EngineSessionManager:
         authorized_modalities: tuple[Modality, ...],
         ref_image_bytes: bytes | None = None,
         ref_audio_bytes: bytes | None = None,
+        hot_swap_active: bool = True,
     ) -> ConfigUpdateResponse:
         """Validate, stage, and hot-swap reference assets & stream parameters."""
         touches_video = any(
@@ -650,19 +660,24 @@ class EngineSessionManager:
                 self._staged_ref_image = new_ref_image
             if new_ref_audio is not None:
                 self._staged_ref_audio = new_ref_audio
-                if self._voice_pipeline is not None:
+                will_hot_swap_voice = (
+                    hot_swap_active
+                    and self._active_stream is not None
+                    and self._active_stream.voice_active
+                )
+                if self._voice_pipeline is not None and not will_hot_swap_voice:
                     await asyncio.to_thread(
                         self._voice_pipeline.set_reference_audio,
                         new_ref_audio,
                         self._settings.voice_sample_rate,
                     )
             if patch.video is not None:
-                self._staged_video_override = patch.video
+                self._staged_video_updates.update(self._extract_patch_updates(patch.video))
             if patch.audio is not None:
-                self._staged_audio_override = patch.audio
+                self._staged_audio_updates.update(self._extract_patch_updates(patch.audio))
 
             hot_swapped = False
-            if self._active_stream is not None:
+            if hot_swap_active and self._active_stream is not None:
                 await self._active_stream.hot_swap(
                     voice_config=(
                         self._build_audio_config(patch.audio)
@@ -704,7 +719,11 @@ class EngineSessionManager:
     ) -> ActiveStreamSession:
         """Start or restart the single active stream session."""
         # Validate optional start assets & stage them first (only within allowed modalities)
-        await self.apply_config_patch(patch, authorized_modalities=authorized_modalities)
+        await self.apply_config_patch(
+            patch,
+            authorized_modalities=authorized_modalities,
+            hot_swap_active=False,
+        )
 
         want_voice = (
             "voice" in authorized_modalities

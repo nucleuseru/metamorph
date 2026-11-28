@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Optimize Seed-VC DiT and HiFT checkpoints for slim voice-only images.
 
-Converts floating-point tensors in `DiT_uvit_tat_xlsr_ema.pth` and `hift.pt`
-to float16 (or bfloat16) and strips non-inference keys from the DiT checkpoint,
-cutting bundled voice checkpoint storage roughly in half.
+Strips non-inference training keys from `DiT_uvit_tat_xlsr_ema.pth` while
+preserving float32 weights by default (`--dtype keep`), or optionally converts
+floating-point tensors in both DiT and `hift.pt` to float16 or bfloat16.
 """
 
 from __future__ import annotations

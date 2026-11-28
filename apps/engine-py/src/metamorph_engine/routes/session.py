@@ -69,6 +69,18 @@ async def update_session_config(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+async def _read_upload_bounded(upload: UploadFile, max_bytes: int, label: str) -> bytes:
+    """Read an uploaded multipart file in chunks, rejecting oversized payloads early."""
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await upload.read(65536):
+        total += len(chunk)
+        if total > max_bytes:
+            raise AssetError(f"Uploaded {label} exceeds max allowed size ({max_bytes} bytes).")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @router.post("/assets")
 async def upload_session_assets(
     request: Request,
@@ -82,10 +94,19 @@ async def upload_session_assets(
     if request.app.state.lifecycle.state == LifecycleState.BOOTING:
         raise HTTPException(status_code=503, detail="Instance is still warming up.")
     manager: EngineSessionManager = request.app.state.session_manager
-    ref_image_bytes = await ref_image.read() if ref_image is not None else None
-    ref_audio_bytes = await ref_audio.read() if ref_audio is not None else None
+    settings = request.app.state.settings
     patch = SessionConfigPatch(prompt=prompt, clear_ref_image=clear_ref_image)
     try:
+        ref_image_bytes = (
+            await _read_upload_bounded(ref_image, settings.max_ref_image_bytes, "ref_image")
+            if ref_image is not None
+            else None
+        )
+        ref_audio_bytes = (
+            await _read_upload_bounded(ref_audio, settings.max_ref_audio_bytes, "ref_audio")
+            if ref_audio is not None
+            else None
+        )
         return await manager.apply_config_patch(
             patch,
             authorized_modalities=claims.modalities,

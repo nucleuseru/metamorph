@@ -129,22 +129,31 @@ def test_github_workflow_builds_and_deploys_all_targets() -> None:
         "FROM python:3.12-slim AS voice-builder",
         "FROM python:3.12-slim AS voice",
         "FROM ubuntu:22.04 AS full",
-        'ARG CUDA_ARCHS="89;120a"',
+        'ARG CUDA_ARCHS="89;90a;100a;120a"',
         "NVIDIA_VISIBLE_DEVICES=all",
         "--optimize-voice-ckpts",
+        "--skip-campplus",
         "--index-strategy unsafe-best-match",
+        '"nvidia-nvjpeg-cu12>=12.3.5,<13"',
+        "nvidia/nvjpeg/lib",
+        "libnvjpeg.so.12",
         '"setuptools<82"',
         "numpy==2.2.6",
         "pillow==12.2.0",
         "ENGINE_ASYNC_STARTUP=true",
+        "CUDA_ARCHS=${{ inputs.cuda_archs || '89;90a;100a;120a' }}",
+        'default: "89;90a;100a;120a"',
     ):
-        assert expected in docker_content, f"Dockerfile missing expected line: {expected}"
+        assert expected in (docker_content + "\n" + content), (
+            f"Dockerfile/workflow missing expected line: {expected}"
+        )
 
     voice_section = docker_content.split("AS voice-builder", 1)[1].split(
         "# Stage 3: Full GPU builder", 1
     )[0]
     for forbidden in ("ffmpeg", "sox", "librosa", "soundfile", "torch/bin"):
         assert forbidden not in voice_section, f"voice stage should not contain {forbidden}"
+    assert "uv sync --frozen --no-dev --inexact" not in voice_section
 
     full_builder_section = docker_content.split("AS full-builder", 1)[1].split(
         "# Stage 4: Final full GPU image", 1
@@ -153,6 +162,7 @@ def test_github_workflow_builds_and_deploys_all_targets() -> None:
         assert required_kept not in full_builder_section, (
             f"full-builder should not delete {required_kept}"
         )
+    assert "uv sync --frozen --no-dev --inexact" not in full_builder_section
 
     full_runtime_section = docker_content.split("AS full\n", 1)[1]
     for forbidden in (
@@ -307,3 +317,76 @@ def test_entrypoint_prefers_bundled_voice_weights_and_extracts_cache_archive(
     assert not (voice_cache / "torchinductor" / "cached_kernel.bin").exists()
     assert "Extracting compile cache archive" not in voice_res.stderr
     assert "Seeding local compile cache" not in voice_res.stderr
+
+
+def test_download_models_flags_skip_campplus_force_and_pruned_xlsr_skip(tmp_path: Path) -> None:
+    ckpt_dir = tmp_path / "checkpoints"
+    pruned_dir = ckpt_dir / "seed-vc" / "facebook__wav2vec2-xls-r-300m-l12-fp16"
+    pruned_dir.mkdir(parents=True)
+    (pruned_dir / "model.safetensors").write_bytes(b"pruned")
+
+    res = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "download_models.sh"),
+            "--dest",
+            str(ckpt_dir),
+            "--voice",
+            "--skip-campplus",
+            "--force",
+            "--dry-run",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "campplus_cn_common.bin" not in res.stdout
+    assert "force_download=True" in res.stdout
+    assert "facebook/wav2vec2-xls-r-300m" in res.stdout
+
+    # Without --force, existing pruned XLSR skips raw XLSR snapshot download
+    res_skip = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "download_models.sh"),
+            "--dest",
+            str(ckpt_dir),
+            "--voice",
+            "--skip-campplus",
+            "--dry-run",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "skipping raw download" in res_skip.stdout
+    assert "snapshot_download" not in res_skip.stdout
+
+
+def test_entrypoint_5090_skips_sageattention_probe_when_video_disabled(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    nvidia_smi = fake_bin / "nvidia-smi"
+    nvidia_smi.write_text("#!/usr/bin/env bash\necho 'NVIDIA GeForce RTX 5090, 32607'\n")
+    nvidia_smi.chmod(0o755)
+
+    res = subprocess.run(
+        [str(ENTRYPOINT), "--print-env"],
+        env={
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "ENGINE_BACKEND": "gpu",
+            "ENGINE_ENABLE_VIDEO": "false",
+            "ENGINE_ENABLE_VOICE": "true",
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    parsed = dict(line.split("=", 1) for line in res.stdout.strip().splitlines() if "=" in line)
+    assert parsed["JOYOMNI_SAGE_ATTN"] == "0"
+    assert parsed["JOYOMNI_FA4_ATTN"] == "0"
+
+
+def test_prewarm_cache_preserves_mode_sidecar_before_atomic_write() -> None:
+    prewarm_src = (SCRIPTS_DIR / "prewarm_cache.sh").read_text(encoding="utf-8")
+    assert 'rm -f "${JOYOMNI_VOLUME_CACHE_ROOT}.compile_mode"' not in prewarm_src
+    assert "force=True" in prewarm_src
+    assert "warmed_shapes=warmed_shapes" in prewarm_src

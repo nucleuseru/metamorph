@@ -305,14 +305,19 @@ async def ws_session(websocket: WebSocket) -> None:
                     )
                     continue
 
-                await active_stream.submit_binary_frame(
-                    track=header.track,
-                    codec=header.codec,
-                    flags=header.flags,
-                    seq=header.seq,
-                    pts_us=header.pts_us,
-                    payload=payload_mv,
-                )
+                try:
+                    await active_stream.submit_binary_frame(
+                        track=header.track,
+                        codec=header.codec,
+                        flags=header.flags,
+                        seq=header.seq,
+                        pts_us=header.pts_us,
+                        payload=payload_mv,
+                    )
+                except (ProtocolError, ValueError) as exc:
+                    await _send_json(
+                        {"type": "error", "code": "protocol_error", "message": str(exc)}
+                    )
                 continue
 
             raw_text = message.get("text")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from metamorph_engine.pipelines.base import decode_pcm_bytes
 from metamorph_engine.protocol import (
     HEADER_SIZE,
     AudioCodec,
@@ -81,3 +82,8 @@ def test_pack_rejects_overflow_fields() -> None:
         pack_frame(Track.AUDIO, AudioCodec.PCM_S16LE, seq=-1, pts_us=0, payload=b"")
     with pytest.raises(ProtocolError, match="pts_us"):
         pack_frame(Track.AUDIO, AudioCodec.PCM_S16LE, seq=1, pts_us=-5, payload=b"")
+
+
+def test_decode_pcm_bytes_rejects_odd_length_payload() -> None:
+    with pytest.raises(ProtocolError, match="even byte count"):
+        decode_pcm_bytes(b"\x01\x02\x03", AudioCodec.PCM_S16LE)

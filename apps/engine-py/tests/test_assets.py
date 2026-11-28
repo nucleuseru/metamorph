@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 
+import httpx
 import pytest
 from metamorph_engine.assets import AssetError, AssetLoader
 from tests.conftest import (
@@ -65,3 +66,44 @@ async def test_asset_loader_enforces_allowlist_and_limits() -> None:
 
     with pytest.raises(AssetError, match="Invalid reference image"):
         await loader.load_ref_image(raw_bytes=b"not-an-image")
+
+
+@pytest.mark.asyncio
+async def test_asset_loader_blocks_ssrf_redirects_and_bad_content_length() -> None:
+    jpeg = make_jpeg_bytes(width=32, height=32, color=(10, 200, 30))
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "cdn.example.com" and request.url.path == "/redirect-ssrf":
+            return httpx.Response(
+                302,
+                headers={"Location": "http://169.254.169.254/latest/meta-data/"},
+            )
+        if request.url.host == "cdn.example.com" and request.url.path == "/loop":
+            return httpx.Response(302, headers={"Location": "https://cdn.example.com/loop"})
+        if request.url.host == "cdn.example.com" and request.url.path == "/bad-cl":
+            return httpx.Response(200, headers={"Content-Length": "not-an-int"}, content=jpeg)
+        if request.url.host == "cdn.example.com" and request.url.path == "/neg-cl":
+            return httpx.Response(200, headers={"Content-Length": "-5"}, content=jpeg)
+        if request.url.host == "cdn.example.com" and request.url.path == "/ok-redirect":
+            return httpx.Response(302, headers={"Location": "/final.jpg"})
+        if request.url.host == "cdn.example.com" and request.url.path == "/final.jpg":
+            return httpx.Response(200, content=jpeg)
+        return httpx.Response(404)
+
+    settings = build_test_settings(allowed_asset_hosts="cdn.example.com")
+    loader = AssetLoader(settings, http_transport=httpx.MockTransport(_handler))
+
+    with pytest.raises(AssetError, match="ENGINE_ALLOWED_ASSET_HOSTS"):
+        await loader.load_ref_image(url="https://cdn.example.com/redirect-ssrf")
+
+    with pytest.raises(AssetError, match="Too many redirects"):
+        await loader.load_ref_image(url="https://cdn.example.com/loop")
+
+    with pytest.raises(AssetError, match="Content-Length"):
+        await loader.load_ref_image(url="https://cdn.example.com/bad-cl")
+
+    with pytest.raises(AssetError, match="Content-Length"):
+        await loader.load_ref_image(url="https://cdn.example.com/neg-cl")
+
+    ok = await loader.load_ref_image(url="https://cdn.example.com/ok-redirect")
+    assert ok.size == (32, 32)
