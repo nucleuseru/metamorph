@@ -167,7 +167,7 @@ ENTRYPOINT ["/app/docker/entrypoint.sh"]
 # ==============================================================================
 FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04 AS full-builder
 
-ARG CUDA_ARCHS="89;90a;100a;120a"
+ARG CUDA_ARCHS="89;120a"
 ARG BUILD_FP8=1
 ARG INSTALL_SAGE_ATTN=1
 ARG SAGE_CUDA_ARCH_LIST="12.0"
@@ -188,10 +188,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     cmake \
     curl \
-    ffmpeg \
     git \
     libglib2.0-0 \
-    libsndfile1 \
     ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
@@ -219,14 +217,11 @@ RUN uv sync --frozen --no-dev --no-install-workspace --package metamorph-engine 
         pillow==12.2.0 \
         opencv-python-headless==4.13.0.92 \
         av==13.1.0 \
-        imageio-ffmpeg==0.6.0 \
         loguru==0.7.3 \
         huggingface-hub>=0.28.1 \
         munch==4.0.0 \
         pyyaml>=6.0.2 \
         scipy>=1.13.0 \
-        soundfile>=0.12.1 \
-        "librosa>=0.11.0" \
         ninja==1.13.0 \
         packaging \
         "setuptools<82" \
@@ -274,39 +269,48 @@ RUN if [ "${INSTALL_FA4}" = "1" ]; then \
             apache-tvm-ffi==0.1.12; \
     fi
 
+COPY packages/shared-py/src ./packages/shared-py/src
+COPY apps/engine-py/src ./apps/engine-py/src
+
+# Sync workspace packages into .venv and prune non-runtime artifacts (keep triton, torch/include, torch/bin)
+RUN uv sync --frozen --no-dev --inexact --package metamorph-engine \
+    && rm -rf \
+        /app/.venv/lib/python3.12/site-packages/torch/test \
+        /app/.venv/lib/python3.12/site-packages/torch/share \
+    && find /app/.venv/lib/python3.12/site-packages -type f -name '*.a' -delete \
+    && find /app/.venv/lib/python3.12/site-packages -type d -name '__pycache__' -prune -exec rm -rf {} + \
+    && find /app/.venv/lib/python3.12/site-packages -type f -name '*.pyc' -delete
+
 # ==============================================================================
-# Stage 4: Final full GPU image (JoyAI-Video-Edit + Seed-VC)
+# Stage 4: Final full GPU image (JoyAI-Video-Edit + Seed-VC on ubuntu:22.04)
 # ==============================================================================
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04 AS full
+FROM ubuntu:22.04 AS full
+
+ARG INSTALL_SAGE_ATTN=1
 
 ENV DEBIAN_FRONTEND=noninteractive \
     UV_PYTHON_INSTALL_DIR=/opt/uv-python \
-    CUDA_HOME=/usr/local/cuda \
     PATH="/app/.venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1
+    LD_LIBRARY_PATH="/app/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cublas/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib:/app/.venv/lib/python3.12/site-packages/torch/lib" \
+    PYTHONUNBUFFERED=1 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
-    ffmpeg \
     g++ \
     gcc \
     libglib2.0-0 \
-    libsndfile1 \
-    libsox3 \
-    sox \
     zstd \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=uv-bin /uv /uvx /usr/local/bin/
 COPY --from=full-builder /opt/uv-python /opt/uv-python
 COPY --from=full-builder /app/.venv /app/.venv
 
-COPY pyproject.toml uv.lock .python-version ./
-COPY packages/shared-py ./packages/shared-py
-COPY apps/engine-py/pyproject.toml ./apps/engine-py/pyproject.toml
+COPY packages/shared-py/src ./packages/shared-py/src
 COPY apps/engine-py/src ./apps/engine-py/src
 COPY vendor/seed-vc ./vendor/seed-vc
 COPY vendor/JoyAI-Video-Edit/deploy ./vendor/JoyAI-Video-Edit/deploy
@@ -314,8 +318,9 @@ COPY apps/engine-py/docker/entrypoint.sh ./docker/entrypoint.sh
 COPY apps/engine-py/scripts ./scripts
 
 RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py /app/scripts/optimize_voice_checkpoints.py \
-    && uv sync --frozen --no-dev --inexact --package metamorph-engine \
-    && mkdir -p /models
+    && mkdir -p /models \
+    && python -c "import torch, torchvision, torchaudio, transformers, diffusers, av, scipy, metamorph_engine, joyomni_ops; print('full runtime ok:', torch.__version__)" \
+    && if [ "${INSTALL_SAGE_ATTN}" = "1" ]; then python -c "import sageattention"; fi
 
 ENV ENGINE_BACKEND=gpu \
     ENGINE_ASYNC_STARTUP=true \

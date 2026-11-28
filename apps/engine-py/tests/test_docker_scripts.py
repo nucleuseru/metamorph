@@ -128,11 +128,12 @@ def test_github_workflow_builds_and_deploys_all_targets() -> None:
         "FROM ghcr.io/astral-sh/uv:0.12 AS uv-bin",
         "FROM python:3.12-slim AS voice-builder",
         "FROM python:3.12-slim AS voice",
+        "FROM ubuntu:22.04 AS full",
+        'ARG CUDA_ARCHS="89;120a"',
         "NVIDIA_VISIBLE_DEVICES=all",
         "--optimize-voice-ckpts",
         "--index-strategy unsafe-best-match",
         '"setuptools<82"',
-        '"librosa>=0.11.0"',
         "numpy==2.2.6",
         "pillow==12.2.0",
         "ENGINE_ASYNC_STARTUP=true",
@@ -144,6 +145,28 @@ def test_github_workflow_builds_and_deploys_all_targets() -> None:
     )[0]
     for forbidden in ("ffmpeg", "sox", "librosa", "soundfile", "torch/bin"):
         assert forbidden not in voice_section, f"voice stage should not contain {forbidden}"
+
+    full_builder_section = docker_content.split("AS full-builder", 1)[1].split(
+        "# Stage 4: Final full GPU image", 1
+    )[0]
+    for required_kept in ("site-packages/torch/include", "site-packages/torch/bin"):
+        assert required_kept not in full_builder_section, (
+            f"full-builder should not delete {required_kept}"
+        )
+
+    full_runtime_section = docker_content.split("AS full\n", 1)[1]
+    for forbidden in (
+        "ffmpeg",
+        "sox",
+        "libsndfile1",
+        "librosa",
+        "soundfile",
+        "imageio-ffmpeg",
+        "COPY --from=uv-bin",
+    ):
+        assert forbidden not in full_runtime_section, (
+            f"full runtime stage should not contain {forbidden}"
+        )
 
 
 def test_download_models_dry_run_covers_entrypoint_checkpoints(tmp_path: Path) -> None:

@@ -41,7 +41,7 @@ on:
       cuda_archs:
         description: "CUDA architectures for joyomni_ops (full target)"
         type: string
-        default: "89;90a;100a;120a"
+        default: "89;120a"
       build_fp8:
         description: "Compile CUTLASS FP8 GEMM kernels (full target)"
         type: boolean
@@ -233,7 +233,7 @@ jobs:
           cache-from: ${{ steps.flags.outputs.cache_from }}
           cache-to: ${{ steps.flags.outputs.cache_to }}
           build-args: |
-            CUDA_ARCHS=${{ inputs.cuda_archs || '89;90a;100a;120a' }}
+            CUDA_ARCHS=${{ inputs.cuda_archs || '89;120a' }}
             BUILD_FP8=${{ github.event_name == 'workflow_dispatch' && inputs.build_fp8 == false && '0' || '1' }}
             INSTALL_SAGE_ATTN=${{ github.event_name == 'workflow_dispatch' && inputs.install_sage_attn == false && '0' || '1' }}
             INSTALL_FA4=${{ github.event_name == 'workflow_dispatch' && inputs.install_fa4 == true && '1' || '0' }}
