@@ -25,7 +25,7 @@ Options:
   --prune-xlsr            Prune XLSR-300M to 12 layers float16 safetensors (default: on)
   --no-prune-xlsr         Skip offline XLSR pruning
   --remove-unpruned-xlsr  Delete the unpruned 24-layer fp32 XLSR directory after pruning
-  --optimize-voice-ckpts  Convert DiT and HiFT checkpoints to float16 and strip training keys
+  --optimize-voice-ckpts  Strip non-inference training keys from Seed-VC DiT checkpoint (preserves float32 weights)
   --force                 Re-download even if destination files already exist
   --dry-run               Print download actions without executing
   -h, --help              Show this help
@@ -140,9 +140,9 @@ if [ "$WANT_VOICE" = "1" ]; then
 
     if [ "$OPTIMIZE_VOICE_CKPTS" = "1" ]; then
         if [ "$DRY_RUN" = "1" ]; then
-            run_or_echo "$PYTHON_BIN" "$SCRIPT_DIR/optimize_voice_checkpoints.py" --cache-dir "$SEEDVC_CACHE" --dtype float16
+            run_or_echo "$PYTHON_BIN" "$SCRIPT_DIR/optimize_voice_checkpoints.py" --cache-dir "$SEEDVC_CACHE"
         elif "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
-            "$PYTHON_BIN" "$SCRIPT_DIR/optimize_voice_checkpoints.py" --cache-dir "$SEEDVC_CACHE" --dtype float16
+            "$PYTHON_BIN" "$SCRIPT_DIR/optimize_voice_checkpoints.py" --cache-dir "$SEEDVC_CACHE"
         else
             echo "[download_models] Skipping voice checkpoint optimization (torch not installed in $PYTHON_BIN)"
         fi

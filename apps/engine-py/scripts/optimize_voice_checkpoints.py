@@ -24,9 +24,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--dtype",
-        choices=("float16", "bfloat16"),
-        default="float16",
-        help="Target floating-point storage dtype (default: float16).",
+        choices=("keep", "float16", "bfloat16"),
+        default="keep",
+        help="Target floating-point storage dtype (default: keep original precision).",
     )
     return parser.parse_args(argv)
 
@@ -64,27 +64,28 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"Cache directory not found: {cache_dir}")
 
     torch_mod: Any = importlib.import_module("torch")
-    target_dtype = getattr(torch_mod, args.dtype)
+    target_dtype = None if args.dtype == "keep" else getattr(torch_mod, args.dtype)
 
     dit_path = cache_dir / "DiT_uvit_tat_xlsr_ema.pth"
     if dit_path.is_file():
         before_mb = dit_path.stat().st_size / (1024 * 1024)
         state = _torch_load(torch_mod, dit_path)
-        optimized = (
-            {"net": _convert_state_dict(state["net"], target_dtype)}
-            if isinstance(state, dict) and "net" in state
-            else _convert_state_dict(state, target_dtype)
-        )
-        _atomic_torch_save(torch_mod, optimized, dit_path)
-        after_mb = dit_path.stat().st_size / (1024 * 1024)
-        print(
-            f"[optimize_voice_checkpoints] {dit_path.name}: "
-            f"{before_mb:.1f} MiB -> {after_mb:.1f} MiB ({args.dtype})",
-            flush=True,
-        )
+        has_extra_keys = isinstance(state, dict) and "net" in state and len(state) > 1
+        if target_dtype is not None or has_extra_keys:
+            base = {"net": state["net"]} if isinstance(state, dict) and "net" in state else state
+            optimized = (
+                _convert_state_dict(base, target_dtype) if target_dtype is not None else base
+            )
+            _atomic_torch_save(torch_mod, optimized, dit_path)
+            after_mb = dit_path.stat().st_size / (1024 * 1024)
+            print(
+                f"[optimize_voice_checkpoints] {dit_path.name}: "
+                f"{before_mb:.1f} MiB -> {after_mb:.1f} MiB ({args.dtype})",
+                flush=True,
+            )
 
     hift_path = cache_dir / "hift.pt"
-    if hift_path.is_file():
+    if hift_path.is_file() and target_dtype is not None:
         before_mb = hift_path.stat().st_size / (1024 * 1024)
         state = _torch_load(torch_mod, hift_path)
         optimized = _convert_state_dict(state, target_dtype)

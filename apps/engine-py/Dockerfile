@@ -91,7 +91,7 @@ ARG BUNDLE_VOICE_WEIGHTS=1
 
 COPY apps/engine-py/scripts ./scripts
 
-# Bake pruned & fp16-optimized Seed-VC checkpoints onto local NVMe so voice pods skip FUSE & HF API calls
+# Bake pruned XLSR-L12 + stripped full-precision Seed-VC checkpoints onto local NVMe so voice pods skip FUSE & HF API calls
 RUN chmod +x /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py /app/scripts/optimize_voice_checkpoints.py \
     && mkdir -p /app/bundled_models \
     && if [ "${BUNDLE_VOICE_WEIGHTS}" = "1" ]; then \

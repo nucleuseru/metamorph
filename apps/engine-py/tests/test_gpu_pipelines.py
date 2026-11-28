@@ -1415,8 +1415,20 @@ def test_optimize_voice_checkpoints_converts_floats_and_strips_training_keys(
     )
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
 
-    rc = opt_mod.main(["--cache-dir", str(tmp_path), "--dtype", "float16"])
-    assert rc == 0
+    rc_keep = opt_mod.main(["--cache-dir", str(tmp_path)])
+    assert rc_keep == 0
+
+    dit_keep = stored[str(dit_path)]
+    assert list(dit_keep.keys()) == ["net"]
+    assert dit_keep["net"]["cfm"]["weight"].arr.dtype == np.float32
+    assert dit_keep["net"]["cfm"]["step"].arr.dtype == np.int64
+
+    hift_keep = stored[str(hift_path)]
+    assert hift_keep["conv.weight"].arr.dtype == np.float32
+    assert hift_keep["num_batches"] == 5
+
+    rc_fp16 = opt_mod.main(["--cache-dir", str(tmp_path), "--dtype", "float16"])
+    assert rc_fp16 == 0
 
     dit_out = stored[str(dit_path)]
     assert list(dit_out.keys()) == ["net"]
@@ -1426,3 +1438,51 @@ def test_optimize_voice_checkpoints_converts_floats_and_strips_training_keys(
     hift_out = stored[str(hift_path)]
     assert hift_out["conv.weight"].arr.dtype == np.float16
     assert hift_out["num_batches"] == 5
+
+
+def test_seedvc_cast_state_to_float32_and_to_device_float32() -> None:
+    """Verify fp16 checkpoint tensors are upcast to float32 before loading into modules."""
+    from metamorph_engine.pipelines.voice_seedvc import (
+        _cast_state_to_float32,
+        _to_device_float32,
+    )
+
+    class _FakeTensor:
+        def __init__(self, arr: np.ndarray) -> None:
+            self.arr = arr
+
+        @property
+        def dtype(self) -> Any:
+            return self.arr.dtype
+
+        def is_floating_point(self) -> bool:
+            return bool(np.issubdtype(self.arr.dtype, np.floating))
+
+        def float(self) -> _FakeTensor:
+            return _FakeTensor(self.arr.astype(np.float32))
+
+    fake_torch = types.SimpleNamespace(float32=np.float32)
+    fp16_state = {
+        "resblocks.0.convs2.0.weight": _FakeTensor(np.ones((2, 2), dtype=np.float16)),
+        "resblocks.0.convs2.0.bias": _FakeTensor(np.zeros((2,), dtype=np.float16)),
+        "num_batches": _FakeTensor(np.array([7], dtype=np.int64)),
+    }
+    upcast = _cast_state_to_float32(fp16_state, fake_torch)
+    assert upcast["resblocks.0.convs2.0.weight"].dtype == np.float32
+    assert upcast["resblocks.0.convs2.0.bias"].dtype == np.float32
+    assert upcast["num_batches"].dtype == np.int64
+
+    calls: list[str] = []
+
+    class _FakeModule:
+        def to(self, dev: Any) -> _FakeModule:
+            calls.append(f"to:{dev}")
+            return self
+
+        def float(self) -> _FakeModule:
+            calls.append("float")
+            return self
+
+    mod = _to_device_float32(_FakeModule(), "cuda:0")
+    assert isinstance(mod, _FakeModule)
+    assert calls == ["to:cuda:0", "float"]
