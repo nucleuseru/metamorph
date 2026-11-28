@@ -219,6 +219,7 @@ export class EngineOrchestrator extends Context.Service<
           const pollInterval = Duration.millis(Math.max(50, config.readinessPollIntervalMs));
           const provider = registry.get(initialRecord.provider);
           let current = initialRecord;
+          let readyFailureCount = 0;
 
           while (true) {
             const latest = yield* store.getById(current.id).pipe(Effect.orElseSucceed(() => null));
@@ -336,6 +337,13 @@ export class EngineOrchestrator extends Context.Service<
                     readyRes.success.response.reason ?? "engine_shutting_down_during_startup";
                   yield* failAndCleanup(current, reason).pipe(Effect.ignore);
                   return;
+                }
+              } else if (current.status === "warming") {
+                readyFailureCount++;
+                if (readyFailureCount === 1 || readyFailureCount % 5 === 0) {
+                  yield* Effect.logWarning(
+                    `Readiness probe for session '${current.id}' (${current.httpUrl}/ready) failed (attempt ${readyFailureCount}): ${readyRes.failure.message}`,
+                  );
                 }
               }
             }
@@ -532,6 +540,25 @@ export class EngineOrchestrator extends Context.Service<
           if (!canTransitionToReady) {
             return record;
           }
+          // Fast-booting pods (e.g. bundled voice images) can send the outbound `ready`
+          // webhook before the provider's inbound HTTPS/WSS proxy is routable. Verify
+          // `/ready` through `record.httpUrl` first; if unreachable, stay `warming` and
+          // let `watchReadiness` promote to `ready` once the external proxy routes traffic.
+          if (record.httpUrl) {
+            const probe = yield* engineClient.ready(record.httpUrl, record.id).pipe(Effect.result);
+            if (probe._tag === "Failure" || !probe.success.ready) {
+              yield* Effect.logWarning(
+                `Engine '${record.id}' sent 'ready' webhook before ${record.httpUrl}/ready was reachable; waiting for readiness watcher`,
+              );
+              if (record.status === "provisioning") {
+                const warming = yield* store.update(record.id, { status: "warming" });
+                const res = warming ?? record;
+                yield* eventBus.publish(toStatusEvent(res));
+                return res;
+              }
+              return record;
+            }
+          }
           const updated = yield* store.update(record.id, {
             status: "ready",
             readyAt: record.readyAt ?? now,
@@ -627,6 +654,7 @@ export class EngineOrchestrator extends Context.Service<
             continue;
           }
 
+          let latestItem = item;
           const provider = registry.get(item.provider);
           if (provider) {
             const pStatus = yield* provider.getStatus(item.providerInstanceId).pipe(Effect.result);
@@ -634,11 +662,13 @@ export class EngineOrchestrator extends Context.Service<
               const ps = pStatus.success;
               if (ps.status === "terminated" || ps.status === "stopped") {
                 yield* stopAndCleanup(item, `provider_${ps.status}`).pipe(Effect.ignore);
+                continue;
               } else if (ps.status === "failed") {
                 yield* failAndCleanup(
                   item,
                   `provider_failed${ps.reason ? `: ${ps.reason}` : ""}`,
                 ).pipe(Effect.ignore);
+                continue;
               } else if (
                 (ps.httpUrl !== null && item.httpUrl === null) ||
                 (ps.wsUrl !== null && item.wsUrl === null)
@@ -651,8 +681,37 @@ export class EngineOrchestrator extends Context.Service<
                   })
                   .pipe(Effect.orElseSucceed(() => null));
                 if (updated) {
+                  latestItem = updated;
                   yield* eventBus.publish(toStatusEvent(updated));
                 }
+              }
+            }
+          }
+
+          // Recover provisioning/warming sessions even if the API restarted mid-boot
+          if (
+            (latestItem.status === "provisioning" || latestItem.status === "warming") &&
+            latestItem.httpUrl &&
+            latestItem.wsUrl
+          ) {
+            const probe = yield* engineClient
+              .ready(latestItem.httpUrl, latestItem.id)
+              .pipe(Effect.result);
+            if (probe._tag === "Success" && probe.success.ready) {
+              const readyAt = new Date(nowMs);
+              const updated = yield* store
+                .update(latestItem.id, { status: "ready", readyAt })
+                .pipe(Effect.orElseSucceed(() => null));
+              if (updated && updated.httpUrl && updated.wsUrl) {
+                yield* eventBus.publish({
+                  type: "session_ready",
+                  sessionId: updated.id,
+                  status: updated.status,
+                  httpUrl: updated.httpUrl,
+                  wsUrl: updated.wsUrl,
+                  tlsSupported: updated.tlsSupported,
+                  timestamp: readyAt.toISOString(),
+                });
               }
             }
           }

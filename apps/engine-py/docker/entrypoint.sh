@@ -181,24 +181,27 @@ mkdir -p \
     "$CUDA_CACHE_PATH"
 
 # Seed local SSD compile cache from persistent volume archive (fast single-file read) or directory
-if [ "$JOYOMNI_CACHE_ROOT" != "$JOYOMNI_VOLUME_CACHE_ROOT" ]; then
-    if [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" ] && command -v zstd >/dev/null 2>&1; then
-        printf '[entrypoint] Extracting compile cache archive %s.tar.zst -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
-        tar --zstd -xf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
-    elif [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" ]; then
-        printf '[entrypoint] Extracting compile cache archive %s.tar.gz -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
-        tar -xzf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
-    elif [ -d "$JOYOMNI_VOLUME_CACHE_ROOT" ]; then
-        printf '[entrypoint] Seeding local compile cache %s from %s\n' "$JOYOMNI_CACHE_ROOT" "$JOYOMNI_VOLUME_CACHE_ROOT" >&2
-        cp -rn "$JOYOMNI_VOLUME_CACHE_ROOT/." "$JOYOMNI_CACHE_ROOT/" 2>/dev/null || true
-    fi
-elif [ ! -f "$JOYOMNI_CACHE_ROOT/.metamorph_compile_mode" ]; then
-    if [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" ] && command -v zstd >/dev/null 2>&1; then
-        printf '[entrypoint] Extracting compile cache archive %s.tar.zst -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
-        tar --zstd -xf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
-    elif [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" ]; then
-        printf '[entrypoint] Extracting compile cache archive %s.tar.gz -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
-        tar -xzf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
+# Skip on voice-only instances (Seed-VC does not use TorchInductor/Triton video caches)
+if [ "${ENGINE_ENABLE_VIDEO:-true}" = "true" ]; then
+    if [ "$JOYOMNI_CACHE_ROOT" != "$JOYOMNI_VOLUME_CACHE_ROOT" ]; then
+        if [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" ] && command -v zstd >/dev/null 2>&1; then
+            printf '[entrypoint] Extracting compile cache archive %s.tar.zst -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
+            tar --zstd -xf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
+        elif [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" ]; then
+            printf '[entrypoint] Extracting compile cache archive %s.tar.gz -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
+            tar -xzf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
+        elif [ -d "$JOYOMNI_VOLUME_CACHE_ROOT" ]; then
+            printf '[entrypoint] Seeding local compile cache %s from %s\n' "$JOYOMNI_CACHE_ROOT" "$JOYOMNI_VOLUME_CACHE_ROOT" >&2
+            cp -rn "$JOYOMNI_VOLUME_CACHE_ROOT/." "$JOYOMNI_CACHE_ROOT/" 2>/dev/null || true
+        fi
+    elif [ ! -f "$JOYOMNI_CACHE_ROOT/.metamorph_compile_mode" ]; then
+        if [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" ] && command -v zstd >/dev/null 2>&1; then
+            printf '[entrypoint] Extracting compile cache archive %s.tar.zst -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
+            tar --zstd -xf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.zst" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
+        elif [ -f "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" ]; then
+            printf '[entrypoint] Extracting compile cache archive %s.tar.gz -> %s\n' "$JOYOMNI_VOLUME_CACHE_ROOT" "$JOYOMNI_CACHE_ROOT" >&2
+            tar -xzf "${JOYOMNI_VOLUME_CACHE_ROOT}.tar.gz" -C "$JOYOMNI_CACHE_ROOT" 2>/dev/null || true
+        fi
     fi
 fi
 

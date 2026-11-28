@@ -9,6 +9,7 @@ FORCE=0
 DRY_RUN=0
 PRUNE_XLSR=1
 REMOVE_UNPRUNED_XLSR=0
+OPTIMIZE_VOICE_CKPTS=0
 
 usage() {
     cat <<'EOF'
@@ -24,6 +25,7 @@ Options:
   --prune-xlsr            Prune XLSR-300M to 12 layers float16 safetensors (default: on)
   --no-prune-xlsr         Skip offline XLSR pruning
   --remove-unpruned-xlsr  Delete the unpruned 24-layer fp32 XLSR directory after pruning
+  --optimize-voice-ckpts  Convert DiT and HiFT checkpoints to float16 and strip training keys
   --force                 Re-download even if destination files already exist
   --dry-run               Print download actions without executing
   -h, --help              Show this help
@@ -39,6 +41,7 @@ while [ "$#" -gt 0 ]; do
         --prune-xlsr) PRUNE_XLSR=1; shift ;;
         --no-prune-xlsr) PRUNE_XLSR=0; shift ;;
         --remove-unpruned-xlsr) REMOVE_UNPRUNED_XLSR=1; shift ;;
+        --optimize-voice-ckpts) OPTIMIZE_VOICE_CKPTS=1; shift ;;
         --force) FORCE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -132,6 +135,16 @@ if [ "$WANT_VOICE" = "1" ]; then
             fi
         else
             echo "[download_models] Pruned XLSR checkpoint already present at $XLSR_PRUNED_DIR"
+        fi
+    fi
+
+    if [ "$OPTIMIZE_VOICE_CKPTS" = "1" ]; then
+        if [ "$DRY_RUN" = "1" ]; then
+            run_or_echo "$PYTHON_BIN" "$SCRIPT_DIR/optimize_voice_checkpoints.py" --cache-dir "$SEEDVC_CACHE" --dtype float16
+        elif "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
+            "$PYTHON_BIN" "$SCRIPT_DIR/optimize_voice_checkpoints.py" --cache-dir "$SEEDVC_CACHE" --dtype float16
+        else
+            echo "[download_models] Skipping voice checkpoint optimization (torch not installed in $PYTHON_BIN)"
         fi
     fi
 fi

@@ -113,7 +113,11 @@ export function useActiveSession(enabled = true) {
     queryKey: queryKeys.activeSession,
     queryFn: getActiveSession,
     enabled,
-    refetchInterval: 15_000,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status === "provisioning" || status === "warming") return 3_000;
+      return 15_000;
+    },
   });
 }
 

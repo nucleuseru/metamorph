@@ -82,11 +82,11 @@ Claims:
 
 Images are built from the **repository root** via [engine-docker.yml](../.github/workflows/engine-docker.yml) (or `docker build -f apps/engine-py/Dockerfile --target <target> .`):
 
-| Target  | Base Image                                     | Purpose                                                                                       |
-| :------ | :--------------------------------------------- | :-------------------------------------------------------------------------------------------- |
-| `full`  | `nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04`   | Voice + RV2V/V2V GPU image (`JoyAI-Video-Edit` + `joyomni_ops` FP8 + `Seed-VC`)               |
-| `voice` | `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04` | Smaller/faster CUDA 12.8 runtime image for voice-only instances (`ENGINE_ENABLE_VIDEO=false`) |
-| `mock`  | `python:3.12-slim`                             | Lightweight CPU mock image (`ENGINE_BACKEND=mock`) for local `apps/api` dev                   |
+| Target  | Base Image                                   | Purpose                                                                                                |
+| :------ | :------------------------------------------- | :----------------------------------------------------------------------------------------------------- |
+| `full`  | `nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04` | Voice + RV2V/V2V GPU image (`JoyAI-Video-Edit` + `joyomni_ops` FP8 + `Seed-VC`)                        |
+| `voice` | `python:3.12-slim`                           | Slim voice-only image (`ENGINE_ENABLE_VIDEO=false`; self-contained CUDA 12.8 via PyTorch cu128 wheels) |
+| `mock`  | `python:3.12-slim`                           | Lightweight CPU mock image (`ENGINE_BACKEND=mock`) for local `apps/api` dev                            |
 
 ```bash
 # Local CPU mock image
@@ -122,7 +122,7 @@ To pre-warm a `max-autotune-no-cudagraphs` GPU compile archive once per GPU SKU 
 /app/scripts/prewarm_cache.sh --res 840x480
 ```
 
-Voice-only images (`:voice`) bake pruned Seed-VC checkpoints (`~565 MB`) into `/app/bundled_models/seed-vc` by default (`BUNDLE_VOICE_WEIGHTS=1`), eliminating FUSE and HuggingFace API calls during voice startup.
+Voice-only images (`:voice`) bake pruned, fp16-optimized Seed-VC checkpoints into `/app/bundled_models/seed-vc` by default (`BUNDLE_VOICE_WEIGHTS=1`), eliminating FUSE and HuggingFace API calls during voice startup.
 
 ### CI/CD (GitHub Actions -> Docker Hub)
 

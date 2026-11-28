@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sys
+import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
@@ -23,11 +25,24 @@ from metamorph_engine.session import EngineSessionManager
 logger = logging.getLogger("metamorph_engine.main")
 
 
+def configure_engine_logging(level_name: str = "info") -> None:
+    """Ensure `metamorph_engine.*` INFO/WARNING logs emit to stderr alongside uvicorn."""
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    pkg_logger = logging.getLogger("metamorph_engine")
+    pkg_logger.setLevel(level)
+    if not pkg_logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+        pkg_logger.addHandler(handler)
+    pkg_logger.propagate = False
+
+
 def create_app(
     settings: EngineSettings | None = None,
     *,
     shutdown_callback: Callable[[], None] | None = None,
     webhook_transport: httpx.AsyncBaseTransport | None = None,
+    proxy_probe_transport: httpx.AsyncBaseTransport | None = None,
     asset_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Create and wire a configured FastAPI inference application."""
@@ -39,6 +54,7 @@ def create_app(
         cfg,
         shutdown_callback=shutdown_callback,
         webhook_transport=webhook_transport,
+        proxy_probe_transport=proxy_probe_transport,
         on_teardown=session_manager.shutdown_pipelines,
     )
 
@@ -47,8 +63,19 @@ def create_app(
         """Load enabled pipelines, optionally bootstrap assets, and mark instance ready."""
 
         async def _boot_sequence() -> None:
+            t_boot = time.monotonic()
+            logger.info(
+                "Starting engine boot (backend=%s, modalities=%s, async=%s)",
+                cfg.backend,
+                ",".join(cfg.enabled_modalities),
+                cfg.use_async_startup,
+            )
             await session_manager.load_and_warmup()
             await session_manager.bootstrap_assets()
+            logger.info(
+                "Engine warmup and asset bootstrap completed in %.1fs",
+                time.monotonic() - t_boot,
+            )
             await lifecycle.mark_ready()
 
         startup_task: asyncio.Task[None] | None = None
@@ -109,6 +136,7 @@ app = create_app()
 def run() -> None:
     """Launch uvicorn with uvloop and httptools wired to lifecycle exit."""
     settings = get_settings()
+    configure_engine_logging(settings.log_level)
     server_holder: dict[str, uvicorn.Server] = {}
 
     def _trigger_exit() -> None:

@@ -6,7 +6,7 @@ import {
   EngineShutdownResponse,
   type SessionConfigPatch,
 } from "@metamorph/shared";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, type Duration, Effect, Layer, Option, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 import { EngineClientError } from "./errors.ts";
@@ -116,8 +116,9 @@ export class EngineClient extends Context.Service<EngineClient, EngineClientShap
         instanceId: string,
         path: string,
         req: HttpClientRequest.HttpClientRequest,
+        timeout?: Duration.Input,
       ) {
-        return yield* http.execute(req).pipe(
+        const eff = http.execute(req).pipe(
           Effect.mapError(
             (cause) =>
               new EngineClientError({
@@ -127,6 +128,17 @@ export class EngineClient extends Context.Service<EngineClient, EngineClientShap
               }),
           ),
         );
+        if (timeout === undefined) {
+          return yield* eff;
+        }
+        const maybe = yield* eff.pipe(Effect.timeoutOption(timeout));
+        if (Option.isNone(maybe)) {
+          return yield* new EngineClientError({
+            instanceId,
+            message: `Engine request ${path} timed out`,
+          });
+        }
+        return maybe.value;
       });
 
       const health: EngineClientShape["health"] = Effect.fn("EngineClient.health")(function* (
@@ -138,6 +150,7 @@ export class EngineClient extends Context.Service<EngineClient, EngineClientShap
           instanceId,
           "/health",
           HttpClientRequest.get(`${clean}/health`),
+          "5 seconds",
         );
         return yield* decodeJsonResponse(instanceId, "/health", decodeHealth)(resp);
       });
@@ -147,7 +160,12 @@ export class EngineClient extends Context.Service<EngineClient, EngineClientShap
         instanceId: string,
       ) {
         const clean = baseUrl.replace(/\/+$/, "");
-        const resp = yield* execute(instanceId, "/ready", HttpClientRequest.get(`${clean}/ready`));
+        const resp = yield* execute(
+          instanceId,
+          "/ready",
+          HttpClientRequest.get(`${clean}/ready`),
+          "5 seconds",
+        );
         if (resp.status !== 200 && resp.status !== 503) {
           const text = yield* resp.text.pipe(Effect.orElseSucceed(() => ""));
           return yield* new EngineClientError({

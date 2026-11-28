@@ -70,6 +70,7 @@ export interface RealtimeSessionCallbacks {
   onStopped?: (reason?: string) => void;
 }
 
+const INITIAL_CONNECT_BACKOFF_MS = [1_500, 2_500, 4_000, 5_000, 6_000, 6_000] as const;
 const RECONNECT_BACKOFF_MS = [1_000, 2_000, 4_000, 6_000] as const;
 const DIRECT_OPEN_TIMEOUT_MS = 6_000;
 
@@ -106,6 +107,7 @@ export class RealtimeSessionClient {
   private hasAuthenticatedOnce = false;
   private triedRelayFallback = false;
   private intentionalStop = false;
+  private initialConnectAttempts = 0;
   private reconnectAttempts = 0;
   private activeConnectionMode: "direct" | "relay" = "relay";
 
@@ -144,9 +146,19 @@ export class RealtimeSessionClient {
     this.intentionalStop = false;
     this.triedRelayFallback = false;
     this.hasAuthenticatedOnce = false;
+    this.initialConnectAttempts = 0;
     this.reconnectAttempts = 0;
 
     await this.openSocket({ preferDirect: true, isReconnect: false });
+  }
+
+  private handleAsyncOpenFailure(err: unknown): void {
+    if (this.intentionalStop) return;
+    this.callbacks.onError?.(
+      err instanceof Error ? err.message : "Could not connect to your live studio.",
+    );
+    this.callbacks.onPhaseChange?.("error");
+    this.callbacks.onStopped?.("connect_failed");
   }
 
   private async openSocket(opts: { preferDirect: boolean; isReconnect: boolean }): Promise<void> {
@@ -188,7 +200,9 @@ export class RealtimeSessionClient {
           } catch {
             // ignore
           }
-          void this.openSocket({ preferDirect: false, isReconnect: opts.isReconnect });
+          void this.openSocket({ preferDirect: false, isReconnect: opts.isReconnect }).catch(
+            (err) => this.handleAsyncOpenFailure(err),
+          );
         }
       }, DIRECT_OPEN_TIMEOUT_MS);
     }
@@ -212,6 +226,7 @@ export class RealtimeSessionClient {
         if (parsed.type === "auth_ok") {
           receivedAuthOkOnThisSocket = true;
           this.hasAuthenticatedOnce = true;
+          this.initialConnectAttempts = 0;
           this.reconnectAttempts = 0;
           this.clearConnectTimeout();
         }
@@ -223,8 +238,13 @@ export class RealtimeSessionClient {
 
     ws.addEventListener("error", () => {
       if (this.ws !== ws || didFallback || this.intentionalStop) return;
-      if (!receivedAuthOkOnThisSocket && mode === "direct" && !this.triedRelayFallback) {
-        return; // let close handler execute immediate relay fallback
+      const canFallbackToRelay =
+        !receivedAuthOkOnThisSocket && mode === "direct" && !this.triedRelayFallback;
+      const canRetry = !this.hasAuthenticatedOnce
+        ? this.initialConnectAttempts < INITIAL_CONNECT_BACKOFF_MS.length
+        : this.reconnectAttempts < RECONNECT_BACKOFF_MS.length;
+      if (canFallbackToRelay || canRetry) {
+        return; // let close handler execute relay fallback or backoff retry
       }
       this.callbacks.onError?.("WebSocket connection error.");
     });
@@ -239,38 +259,69 @@ export class RealtimeSessionClient {
         return;
       }
 
-      // Direct WS failed before handshake -> immediate transparent relay fallback
-      if (!receivedAuthOkOnThisSocket && mode === "direct" && !this.triedRelayFallback) {
-        this.triedRelayFallback = true;
-        void this.openSocket({ preferDirect: false, isReconnect: opts.isReconnect });
-        return;
-      }
-
       if (ev.code === 4009) {
         this.callbacks.onError?.("Session superseded by another connection.");
         this.callbacks.onPhaseChange?.("error");
+        this.callbacks.onStopped?.("superseded");
         return;
       }
 
       if (ev.code === 4001 || ev.code === 4003) {
         this.callbacks.onError?.(ev.reason || "Session authentication rejected.");
         this.callbacks.onPhaseChange?.("error");
+        this.callbacks.onStopped?.("auth_failed");
+        return;
+      }
+
+      // Direct WS failed before handshake -> immediate transparent relay fallback
+      if (!receivedAuthOkOnThisSocket && mode === "direct" && !this.triedRelayFallback) {
+        this.triedRelayFallback = true;
+        void this.openSocket({ preferDirect: false, isReconnect: opts.isReconnect }).catch((err) =>
+          this.handleAsyncOpenFailure(err),
+        );
+        return;
+      }
+
+      // Transient failure before initial handshake (e.g. cloud proxy still propagating) -> retry
+      if (!this.hasAuthenticatedOnce) {
+        if (this.initialConnectAttempts < INITIAL_CONNECT_BACKOFF_MS.length) {
+          const delayMs = INITIAL_CONNECT_BACKOFF_MS[this.initialConnectAttempts] ?? 6_000;
+          this.initialConnectAttempts++;
+          this.triedRelayFallback = false;
+          this.callbacks.onPhaseChange?.("connecting");
+          this.reconnectTimer = window.setTimeout(() => {
+            this.reconnectTimer = null;
+            void this.openSocket({ preferDirect: true, isReconnect: false }).catch((err) =>
+              this.handleAsyncOpenFailure(err),
+            );
+          }, delayMs);
+          return;
+        }
+
+        this.callbacks.onError?.("Could not connect to your live studio. Please try again.");
+        this.callbacks.onPhaseChange?.("error");
+        this.callbacks.onStopped?.("connect_failed");
         return;
       }
 
       // Unexpected drop after establishing a session -> attempt disconnect_grace reconnect
-      if (this.hasAuthenticatedOnce && this.reconnectAttempts < RECONNECT_BACKOFF_MS.length) {
+      if (this.reconnectAttempts < RECONNECT_BACKOFF_MS.length) {
         const delayMs = RECONNECT_BACKOFF_MS[this.reconnectAttempts] ?? 6_000;
         this.reconnectAttempts++;
         this.callbacks.onPhaseChange?.("reconnecting");
         this.reconnectTimer = window.setTimeout(() => {
           this.reconnectTimer = null;
-          void this.openSocket({ preferDirect: !this.triedRelayFallback, isReconnect: true });
+          void this.openSocket({
+            preferDirect: !this.triedRelayFallback,
+            isReconnect: true,
+          }).catch((err) => this.handleAsyncOpenFailure(err));
         }, delayMs);
         return;
       }
 
-      this.callbacks.onPhaseChange?.("disconnected");
+      this.callbacks.onError?.("Your live connection was interrupted. Please try again.");
+      this.callbacks.onPhaseChange?.("error");
+      this.callbacks.onStopped?.("reconnect_failed");
     });
   }
 

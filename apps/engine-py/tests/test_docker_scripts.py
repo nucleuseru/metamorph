@@ -23,16 +23,20 @@ def test_shell_scripts_are_executable_and_valid_bash() -> None:
         res = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
         assert res.returncode == 0, f"bash -n failed for {script}: {res.stderr}"
 
-    prune_script = SCRIPTS_DIR / "prune_xlsr.py"
-    assert prune_script.is_file()
-    assert os.access(prune_script, os.X_OK)
-    res_help = subprocess.run(
-        ["python3", str(prune_script), "--help"],
-        capture_output=True,
-        text=True,
-    )
-    assert res_help.returncode == 0, res_help.stderr
-    assert "--layers" in res_help.stdout
+    for script_name, flag in (
+        ("prune_xlsr.py", "--layers"),
+        ("optimize_voice_checkpoints.py", "--cache-dir"),
+    ):
+        py_script = SCRIPTS_DIR / script_name
+        assert py_script.is_file()
+        assert os.access(py_script, os.X_OK)
+        res_help = subprocess.run(
+            ["python3", str(py_script), "--help"],
+            capture_output=True,
+            text=True,
+        )
+        assert res_help.returncode == 0, res_help.stderr
+        assert flag in res_help.stdout
 
 
 def test_entrypoint_resolves_volume_paths_and_respects_overrides(tmp_path: Path) -> None:
@@ -122,14 +126,24 @@ def test_github_workflow_builds_and_deploys_all_targets() -> None:
     )
     for expected in (
         "FROM ghcr.io/astral-sh/uv:0.12 AS uv-bin",
+        "FROM python:3.12-slim AS voice-builder",
+        "FROM python:3.12-slim AS voice",
+        "NVIDIA_VISIBLE_DEVICES=all",
+        "--optimize-voice-ckpts",
         "--index-strategy unsafe-best-match",
         '"setuptools<82"',
-        "librosa>=0.11.0",
+        '"librosa>=0.11.0"',
         "numpy==2.2.6",
         "pillow==12.2.0",
         "ENGINE_ASYNC_STARTUP=true",
     ):
         assert expected in docker_content, f"Dockerfile missing expected line: {expected}"
+
+    voice_section = docker_content.split("AS voice-builder", 1)[1].split(
+        "# Stage 3: Full GPU builder", 1
+    )[0]
+    for forbidden in ("ffmpeg", "sox", "librosa", "soundfile"):
+        assert forbidden not in voice_section, f"voice stage should not install {forbidden}"
 
 
 def test_download_models_dry_run_covers_entrypoint_checkpoints(tmp_path: Path) -> None:
@@ -252,3 +266,21 @@ def test_entrypoint_prefers_bundled_voice_weights_and_extracts_cache_archive(
     assert (local_cache / ".metamorph_compile_mode").read_text(
         encoding="utf-8"
     ).strip() == "max-autotune-no-cudagraphs"
+
+    # Voice-only pods (ENGINE_ENABLE_VIDEO=false) must skip video compile cache seeding
+    voice_cache = tmp_path / "voice_only_cache"
+    voice_res = subprocess.run(
+        [str(ENTRYPOINT)],
+        env={
+            **env,
+            "ENGINE_ENABLE_VIDEO": "false",
+            "ENGINE_ENABLE_VOICE": "true",
+            "JOYOMNI_CACHE_ROOT": str(voice_cache),
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert not (voice_cache / "torchinductor" / "cached_kernel.bin").exists()
+    assert "Extracting compile cache archive" not in voice_res.stderr
+    assert "Seeding local compile cache" not in voice_res.stderr

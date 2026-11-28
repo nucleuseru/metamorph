@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -43,11 +44,13 @@ class InstanceLifecycleManager:
         *,
         shutdown_callback: Callable[[], None] | None = None,
         webhook_transport: httpx.AsyncBaseTransport | None = None,
+        proxy_probe_transport: httpx.AsyncBaseTransport | None = None,
         on_teardown: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._settings = settings
         self._shutdown_callback = shutdown_callback
         self._webhook_transport = webhook_transport
+        self._proxy_probe_transport = proxy_probe_transport
         self._on_teardown = on_teardown
 
         self._state = LifecycleState.BOOTING
@@ -111,8 +114,71 @@ class InstanceLifecycleManager:
                 return
             self._state = LifecycleState.READY_IDLE
             self._start_idle_timer_locked()
+        logger.info(
+            "Instance marked ready (modalities=%s, startup_idle_timeout=%.0fs)",
+            ",".join(self._settings.enabled_modalities),
+            self._settings.startup_idle_timeout_s,
+        )
+        await self._wait_for_runpod_proxy_ready()
+        if self._state != LifecycleState.READY_IDLE:
+            return
         await self._emit_webhook(
-            "ready", {"enabled_modalities": list(self._settings.enabled_modalities)}
+            "ready",
+            {"enabled_modalities": list(self._settings.enabled_modalities)},
+            retries=3,
+        )
+
+    async def _wait_for_runpod_proxy_ready(
+        self,
+        *,
+        max_wait_s: float = 25.0,
+        poll_interval_s: float = 1.0,
+    ) -> None:
+        """Wait briefly for RunPod's external HTTP proxy before emitting `ready` webhook.
+
+        Fast-booting voice containers can finish warmup in ~6s before RunPod's
+        `https://<pod>-<port>.proxy.runpod.net` route starts forwarding traffic.
+        `GET /ready` already returns 200 immediately while this probe runs, and
+        the wait aborts early as soon as a client connects or shutdown begins.
+        """
+        pod_id = os.environ.get("RUNPOD_POD_ID", "").strip()
+        if not pod_id or not self._settings.lifecycle_webhook_url:
+            return
+        if self._webhook_transport is not None and self._proxy_probe_transport is None:
+            return
+
+        proxy_url = f"https://{pod_id}-{self._settings.port}.proxy.runpod.net/health"
+        started = time.monotonic()
+        deadline = started + max_wait_s
+        client_kwargs: dict[str, Any] = {"timeout": 2.0}
+        if self._proxy_probe_transport is not None:
+            client_kwargs["transport"] = self._proxy_probe_transport
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            while time.monotonic() < deadline:
+                if self._state != LifecycleState.READY_IDLE:
+                    return
+                try:
+                    resp = await client.get(proxy_url)
+                    if resp.status_code == 200:
+                        elapsed = time.monotonic() - started
+                        logger.info("RunPod proxy %s reachable after %.1fs", proxy_url, elapsed)
+                        # Give the user the full startup_idle_timeout_s once the proxy is live
+                        async with self._lock:
+                            if self._state == LifecycleState.READY_IDLE:
+                                self._start_idle_timer_locked()
+                        return
+                except Exception:
+                    pass
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(poll_interval_s, remaining))
+
+        logger.warning(
+            "RunPod proxy %s not reachable after %.1fs; emitting ready webhook anyway",
+            proxy_url,
+            max_wait_s,
         )
 
     async def mark_startup_failed(self, error: str) -> None:
@@ -152,6 +218,7 @@ class InstanceLifecycleManager:
                 logger.exception("Error while closing superseded WebSocket connection.")
 
         if emit_connected:
+            logger.info("WebSocket client connected (user=%s, lease=%s)", user_id, lease_id[:8])
             await self._emit_webhook("connected", {"user_id": user_id})
 
         return lease_id
@@ -174,6 +241,12 @@ class InstanceLifecycleManager:
             emit_disconnected = True
 
         if emit_disconnected:
+            logger.info(
+                "WebSocket client disconnected (user=%s, reason=%s, disconnect_timeout=%.0fs)",
+                self._active_user_id,
+                reason,
+                self._settings.disconnect_timeout_s,
+            )
             await self._emit_webhook(
                 "disconnected",
                 {
@@ -189,6 +262,7 @@ class InstanceLifecycleManager:
             if self._state == LifecycleState.SHUTTING_DOWN:
                 task = self._shutdown_task
             else:
+                logger.info("Instance shutdown requested (reason=%s)", reason)
                 self._state = LifecycleState.SHUTTING_DOWN
                 self._shutdown_reason = reason
                 self._cancel_idle_timer_locked()
@@ -317,6 +391,9 @@ class InstanceLifecycleManager:
                 try:
                     resp = await client.post(url, content=body, headers=headers)
                     resp.raise_for_status()
+                    logger.info(
+                        "Lifecycle webhook '%s' delivered (HTTP %d)", event, resp.status_code
+                    )
                     return
                 except Exception as exc:
                     if attempt + 1 >= retries:

@@ -34,7 +34,7 @@ COPY apps/engine-py/src ./apps/engine-py/src
 COPY apps/engine-py/docker/entrypoint.sh ./docker/entrypoint.sh
 COPY apps/engine-py/scripts ./scripts
 
-RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py \
+RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py /app/scripts/optimize_voice_checkpoints.py \
     && uv sync --frozen --no-dev --inexact --package metamorph-engine
 
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -51,30 +51,23 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 
 # ==============================================================================
-# Stage 2: Voice-only CUDA 12.8 runtime image (Seed-VC)
+# Stage 2a: Voice-only builder (Python 3.12 slim + cu128 PyTorch + pruned weights)
 # ==============================================================================
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04 AS voice
+FROM python:3.12-slim AS voice-builder
 
 COPY --from=uv-bin /uv /uvx /usr/local/bin/
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    UV_PYTHON_INSTALL_DIR=/opt/uv-python \
+    UV_PYTHON_PREFERENCE=only-system \
+    UV_PYTHON_DOWNLOADS=never \
     PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    curl \
-    ffmpeg \
-    libsndfile1 \
-    libsox3 \
-    sox \
-    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-RUN uv python install 3.12
 
 COPY pyproject.toml uv.lock .python-version ./
 COPY packages/shared-py/pyproject.toml ./packages/shared-py/pyproject.toml
@@ -89,34 +82,71 @@ RUN uv sync --frozen --no-dev --no-install-workspace --package metamorph-engine 
         av==13.1.0 \
         einops==0.8.2 \
         "huggingface-hub>=0.28.1,<1.0" \
-        "librosa>=0.11.0" \
         munch==4.0.0 \
         pyyaml>=6.0.2 \
         scipy>=1.13.0 \
-        soundfile>=0.12.1 \
         transformers==4.46.3
 
 ARG BUNDLE_VOICE_WEIGHTS=1
 
 COPY apps/engine-py/scripts ./scripts
 
-# Bake pruned Seed-VC checkpoints (~565 MB) onto local NVMe so voice pods skip FUSE & HF API calls
-RUN chmod +x /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py \
+# Bake pruned & fp16-optimized Seed-VC checkpoints onto local NVMe so voice pods skip FUSE & HF API calls
+RUN chmod +x /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py /app/scripts/optimize_voice_checkpoints.py \
+    && mkdir -p /app/bundled_models \
     && if [ "${BUNDLE_VOICE_WEIGHTS}" = "1" ]; then \
         ENGINE_VOICE_CACHE_DIR=/app/bundled_models/seed-vc \
-        /app/scripts/download_models.sh --voice --prune-xlsr --remove-unpruned-xlsr \
+        /app/scripts/download_models.sh --voice --prune-xlsr --remove-unpruned-xlsr --optimize-voice-ckpts \
         && rm -f /app/bundled_models/seed-vc/campplus_cn_common.bin \
         && rm -rf /root/.cache/huggingface; \
     fi
 
 COPY packages/shared-py/src ./packages/shared-py/src
 COPY apps/engine-py/src ./apps/engine-py/src
+
+# Prune unused triton/headers/static libs/bytecode from .venv while keeping DT_NEEDED CUDA .so libs intact
+RUN uv sync --frozen --no-dev --inexact --package metamorph-engine \
+    && uv pip uninstall --python /app/.venv/bin/python triton || true \
+    && rm -rf \
+        /app/.venv/lib/python3.12/site-packages/torch/include \
+        /app/.venv/lib/python3.12/site-packages/torch/test \
+        /app/.venv/lib/python3.12/site-packages/torch/share \
+        /app/.venv/lib/python3.12/site-packages/torch/bin \
+        /app/.venv/lib/python3.12/site-packages/nvidia/*/include \
+        /app/.venv/lib/python3.12/site-packages/nvidia/*/bin \
+    && find /app/.venv/lib/python3.12/site-packages -type f -name '*.a' -delete \
+    && find /app/.venv/lib/python3.12/site-packages -type d -name '__pycache__' -prune -exec rm -rf {} + \
+    && find /app/.venv/lib/python3.12/site-packages -type f -name '*.pyc' -delete
+
+# ==============================================================================
+# Stage 2b: Voice-only runtime image (Seed-VC on python:3.12-slim + cu128 wheels)
+# ==============================================================================
+FROM python:3.12-slim AS voice
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=voice-builder /app/.venv /app/.venv
+COPY --from=voice-builder /app/bundled_models /app/bundled_models
+COPY packages/shared-py/src ./packages/shared-py/src
+COPY apps/engine-py/src ./apps/engine-py/src
 COPY vendor/seed-vc ./vendor/seed-vc
 COPY apps/engine-py/docker/entrypoint.sh ./docker/entrypoint.sh
+COPY apps/engine-py/scripts ./scripts
 
-RUN chmod +x /app/docker/entrypoint.sh \
-    && uv sync --frozen --no-dev --inexact --package metamorph-engine \
-    && mkdir -p /models
+RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py /app/scripts/optimize_voice_checkpoints.py \
+    && mkdir -p /models \
+    && python -c "import torch, torchaudio, transformers, av, scipy, metamorph_engine"
 
 ENV ENGINE_BACKEND=gpu \
     ENGINE_ASYNC_STARTUP=true \
@@ -284,7 +314,7 @@ COPY vendor/JoyAI-Video-Edit/deploy ./vendor/JoyAI-Video-Edit/deploy
 COPY apps/engine-py/docker/entrypoint.sh ./docker/entrypoint.sh
 COPY apps/engine-py/scripts ./scripts
 
-RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py \
+RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py /app/scripts/optimize_voice_checkpoints.py \
     && uv sync --frozen --no-dev --inexact --package metamorph-engine \
     && mkdir -p /models
 

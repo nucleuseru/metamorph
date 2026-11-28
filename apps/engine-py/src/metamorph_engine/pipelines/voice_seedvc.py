@@ -309,6 +309,78 @@ def _ensure_dac_importable() -> None:
     sys.modules["dac.nn.quantize"] = dac_quantize_mod
 
 
+def _slaney_mel_filterbank(
+    sr: float,
+    n_fft: int,
+    n_mels: int = 128,
+    fmin: float = 0.0,
+    fmax: float | None = None,
+    htk: bool = False,
+    norm: str | float | None = "slaney",
+    dtype: Any = np.float32,
+) -> np.ndarray:
+    """Pure-NumPy Slaney mel filterbank matching `librosa.filters.mel`."""
+    del htk  # Seed-VC always uses default Slaney mel scale (htk=False)
+    if fmax is None:
+        fmax = float(sr) / 2.0
+
+    f_min = 0.0
+    f_sp = 200.0 / 3.0
+    min_log_hz = 1000.0
+    min_log_mel = (min_log_hz - f_min) / f_sp
+    logstep = np.log(6.4) / 27.0
+
+    def _hz_to_mel(freqs: np.ndarray) -> np.ndarray:
+        mels = (freqs - f_min) / f_sp
+        above = freqs >= min_log_hz
+        mels = np.where(
+            above, min_log_mel + np.log(np.maximum(freqs, 1e-12) / min_log_hz) / logstep, mels
+        )
+        return mels
+
+    def _mel_to_hz(mels: np.ndarray) -> np.ndarray:
+        freqs = f_min + f_sp * mels
+        above = mels >= min_log_mel
+        freqs = np.where(above, min_log_hz * np.exp(logstep * (mels - min_log_mel)), freqs)
+        return freqs
+
+    weights = np.zeros((n_mels, 1 + n_fft // 2), dtype=dtype)
+    fftfreqs = np.fft.rfftfreq(n=n_fft, d=1.0 / float(sr))
+    min_mel, max_mel = _hz_to_mel(np.array([float(fmin), float(fmax)], dtype=np.float64))
+    mel_f = _mel_to_hz(np.linspace(min_mel, max_mel, n_mels + 2))
+
+    fdiff = np.diff(mel_f)
+    ramps = np.subtract.outer(mel_f, fftfreqs)
+    for i in range(n_mels):
+        lower = -ramps[i] / fdiff[i]
+        upper = ramps[i + 2] / fdiff[i + 1]
+        weights[i] = np.maximum(0.0, np.minimum(lower, upper))
+
+    if norm == "slaney":
+        enorm = 2.0 / (mel_f[2 : n_mels + 2] - mel_f[:n_mels])
+        weights *= enorm[:, np.newaxis]
+
+    return weights.astype(dtype, copy=False)
+
+
+def _ensure_librosa_importable() -> None:
+    """Provide a stub `librosa.filters.mel` when librosa is absent.
+
+    `vendor/seed-vc/modules/audio.py` only imports `librosa.filters.mel`, so
+    shimming it in pure NumPy avoids pulling `librosa`, `numba`, and `llvmlite`
+    into slim voice images.
+    """
+    if importlib.util.find_spec("librosa") is not None or "librosa.filters" in sys.modules:
+        return
+
+    librosa_mod: Any = types.ModuleType("librosa")
+    librosa_filters_mod: Any = types.ModuleType("librosa.filters")
+    librosa_filters_mod.mel = _slaney_mel_filterbank
+    librosa_mod.filters = librosa_filters_mod
+    sys.modules["librosa"] = librosa_mod
+    sys.modules["librosa.filters"] = librosa_filters_mod
+
+
 def _torch_load_compat(torch_mod: Any, path: str) -> Any:
     """Load legacy Seed-VC checkpoints under PyTorch 2.6+ where `weights_only=True` by default."""
     try:
@@ -690,6 +762,7 @@ class SeedVCVoicePipeline(VoicePipeline):
         hf_hub = importlib.import_module("huggingface_hub")
         transformers = importlib.import_module("transformers")
         _ensure_dac_importable()
+        _ensure_librosa_importable()
         commons = importlib.import_module("modules.commons")
         audio_mod = importlib.import_module("modules.audio")
         campplus_mod = importlib.import_module("modules.campplus.DTDNN")

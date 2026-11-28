@@ -348,4 +348,111 @@ describe("EngineOrchestrator lifecycle, webhooks, conflicts, and reconciliation"
       }).pipe(Effect.provide(testLayer)),
     );
   });
+
+  test("defers premature ready webhook until external proxy /ready is reachable", async () => {
+    let proxyReady = false;
+    const provider: GpuProvider = {
+      name: "runpod",
+      provision: (req) =>
+        Effect.succeed({
+          provider: "runpod",
+          providerInstanceId: `pod-${req.instanceId}`,
+          gpuType: "NVIDIA L4",
+          hourlyRateUsd: 0.44,
+          httpUrl: "https://pod-fast-8000.proxy.runpod.net",
+          wsUrl: "wss://pod-fast-8000.proxy.runpod.net/ws/session",
+          tlsSupported: true,
+        }),
+      getStatus: () =>
+        Effect.succeed({
+          status: "running",
+          httpUrl: "https://pod-fast-8000.proxy.runpod.net",
+          wsUrl: "wss://pod-fast-8000.proxy.runpod.net/ws/session",
+          tlsSupported: true,
+        }),
+      terminate: () => Effect.void,
+      listManaged: Effect.succeed([]),
+    };
+
+    const httpLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) =>
+        Effect.sync(() => {
+          if (req.url.endsWith("/ready")) {
+            if (!proxyReady) {
+              return HttpClientResponse.fromWeb(req, new Response("Bad Gateway", { status: 502 }));
+            }
+            return HttpClientResponse.fromWeb(
+              req,
+              new Response(
+                JSON.stringify({
+                  status: "ready",
+                  lifecycle_state: "ready_idle",
+                  instance_id: "inst-fast",
+                  enabled_modalities: ["voice"],
+                }),
+                { status: 200, headers: { "content-type": "application/json" } },
+              ),
+            );
+          }
+          return HttpClientResponse.fromWeb(req, new Response("{}", { status: 404 }));
+        }),
+      ),
+    );
+
+    const testLayer = EngineOrchestrator.layer.pipe(
+      Layer.provideMerge(
+        OrchestratorConfig.layerFrom({
+          ...defaultOrchestratorConfig,
+          readinessPollIntervalMs: 30,
+          webhookBaseUrl: "https://api.example.com",
+        }),
+      ),
+      Layer.provideMerge(InstanceStore.layerMemory),
+      Layer.provideMerge(ProviderRegistry.layerFrom([provider])),
+      Layer.provideMerge(EngineClient.layer.pipe(Layer.provide(httpLayer))),
+      Layer.provideMerge(OrchestratorEventBus.layer),
+      Layer.provideMerge(Mac.layerWebCrypto.pipe(Layer.provide(SecureRandom.layerWebCrypto))),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const orchestrator = yield* EngineOrchestrator;
+        const eventBus = yield* OrchestratorEventBus;
+
+        const session = yield* orchestrator.provisionSession({
+          userId: "user-fast",
+          modalities: ["voice"],
+          quality: "standard",
+          jwtPublicKeyPem: "-----BEGIN PUBLIC KEY-----\nTEST\n-----END PUBLIC KEY-----",
+          instanceId: "inst-fast",
+        });
+
+        // Outbound ready webhook arrives while RunPod proxy still returns 502
+        const readyBytes = new TextEncoder().encode(
+          JSON.stringify({
+            event: "ready",
+            instance_id: "inst-fast",
+            timestamp: 100,
+            enabled_modalities: ["voice"],
+          }),
+        );
+        const sig = yield* signWebhookPayload(readyBytes, session.webhookSecret);
+        const afterHook = yield* orchestrator.handleWebhook("inst-fast", readyBytes, sig);
+        assert.equal(afterHook.status, "warming");
+
+        // Once the proxy finishes propagating, watchReadiness promotes to ready
+        proxyReady = true;
+        const readyEvents = yield* eventBus.subscribe("inst-fast").pipe(
+          Stream.filter((evt) => evt.type === "session_ready"),
+          Stream.take(1),
+          Stream.runCollect,
+        );
+        assert.equal(readyEvents.length, 1);
+
+        const finalRec = yield* orchestrator.getSession("inst-fast");
+        assert.equal(finalRec.status, "ready");
+      }).pipe(Effect.provide(testLayer)),
+    );
+  });
 });

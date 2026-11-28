@@ -1322,3 +1322,107 @@ def test_joyai_fuse_safetensors_loader_disables_mmap(
     assert seen_bytes_loads == [b"safetensor-bytes"]
     # Originals restored on context exit
     assert fake_st_torch.load_file(str(st_file), device="cpu") == {"via": "mmap"}
+
+
+def test_seedvc_librosa_mel_shim_produces_slaney_filterbank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify pure-NumPy librosa.filters.mel shim works without librosa installed."""
+    from metamorph_engine.pipelines.voice_seedvc import _ensure_librosa_importable
+
+    for name in ("librosa", "librosa.filters"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+
+    _ensure_librosa_importable()
+    assert "librosa.filters" in sys.modules
+    librosa_filters: Any = sys.modules["librosa.filters"]
+
+    mel_8k = librosa_filters.mel(sr=22050, n_fft=1024, n_mels=80, fmin=0, fmax=8000)
+    assert mel_8k.shape == (80, 513)
+    assert mel_8k.dtype == np.float32
+    assert np.all(mel_8k >= 0.0)
+    assert np.all(mel_8k.sum(axis=1) > 0.0)
+    # Bins strictly above fmax=8000 Hz (bin index > 8000 / (22050 / 1024) ~= 371.5) must be zero
+    assert np.all(mel_8k[:, 380:] == 0.0)
+
+    mel_nyq = librosa_filters.mel(sr=22050, n_fft=1024, n_mels=80, fmin=0, fmax=None)
+    assert mel_nyq.shape == (80, 513)
+    assert mel_nyq.dtype == np.float32
+    assert np.all(mel_nyq.sum(axis=1) > 0.0)
+
+
+def test_optimize_voice_checkpoints_converts_floats_and_strips_training_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify optimize_voice_checkpoints.py casts floats to fp16 and keeps only net in DiT."""
+    import importlib.util
+
+    script_path = REPO_ROOT / "apps" / "engine-py" / "scripts" / "optimize_voice_checkpoints.py"
+    spec = importlib.util.spec_from_file_location("optimize_voice_checkpoints", script_path)
+    assert spec is not None and spec.loader is not None
+    opt_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(opt_mod)
+
+    class _FakeTensor:
+        def __init__(self, arr: np.ndarray) -> None:
+            self.arr = arr
+
+        def is_floating_point(self) -> bool:
+            return np.issubdtype(self.arr.dtype, np.floating)
+
+        def to(self, *, dtype: Any) -> _FakeTensor:
+            return _FakeTensor(self.arr.astype(dtype))
+
+    dit_path = tmp_path / "DiT_uvit_tat_xlsr_ema.pth"
+    hift_path = tmp_path / "hift.pt"
+    dit_path.write_bytes(b"placeholder-dit")
+    hift_path.write_bytes(b"placeholder-hift")
+
+    stored: dict[str, Any] = {
+        str(dit_path): {
+            "net": {
+                "cfm": {
+                    "weight": _FakeTensor(np.ones((2, 2), dtype=np.float32)),
+                    "step": _FakeTensor(np.array([42], dtype=np.int64)),
+                }
+            },
+            "optimizer": {"lr": _FakeTensor(np.array([1e-4], dtype=np.float32))},
+            "epoch": 100,
+        },
+        str(hift_path): {
+            "conv.weight": _FakeTensor(np.ones((4,), dtype=np.float32)),
+            "num_batches": 5,
+        },
+    }
+
+    def _fake_load(path: str, map_location: str = "cpu", weights_only: bool = False) -> Any:
+        del map_location, weights_only
+        return stored[path]
+
+    def _fake_save(obj: Any, path: str) -> None:
+        final_path = path[:-4] if path.endswith(".tmp") else path
+        stored[final_path] = obj
+        Path(path).write_bytes(b"saved")
+
+    fake_torch = _make_module(
+        "torch",
+        float16=np.float16,
+        bfloat16=np.float16,
+        load=_fake_load,
+        save=_fake_save,
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    rc = opt_mod.main(["--cache-dir", str(tmp_path), "--dtype", "float16"])
+    assert rc == 0
+
+    dit_out = stored[str(dit_path)]
+    assert list(dit_out.keys()) == ["net"]
+    assert dit_out["net"]["cfm"]["weight"].arr.dtype == np.float16
+    assert dit_out["net"]["cfm"]["step"].arr.dtype == np.int64
+
+    hift_out = stored[str(hift_path)]
+    assert hift_out["conv.weight"].arr.dtype == np.float16
+    assert hift_out["num_batches"] == 5

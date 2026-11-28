@@ -231,6 +231,7 @@ export function StudioStage({
     isSessionLive &&
     !isStreaming &&
     !isReconnecting &&
+    streamPhase !== "error" &&
     (sessionStatus === "provisioning" ||
       sessionStatus === "warming" ||
       sessionStatus === "ready" ||
