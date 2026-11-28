@@ -381,6 +381,31 @@ def _ensure_librosa_importable() -> None:
     sys.modules["librosa.filters"] = librosa_filters_mod
 
 
+def _cast_state_to_float32(obj: Any, torch_mod: Any) -> Any:
+    """Recursively upcast half/bfloat16 checkpoint tensors to float32 before loading."""
+    if isinstance(obj, dict):
+        return {k: _cast_state_to_float32(v, torch_mod) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_cast_state_to_float32(v, torch_mod) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_cast_state_to_float32(v, torch_mod) for v in obj)
+    if (
+        hasattr(obj, "is_floating_point")
+        and obj.is_floating_point()
+        and getattr(obj, "dtype", None) != torch_mod.float32
+    ):
+        return obj.float()
+    return obj
+
+
+def _to_device_float32(module: Any, device: Any) -> Any:
+    """Move a module to `device` and ensure all parameters/buffers are float32."""
+    module = module.to(device)
+    if callable(getattr(module, "float", None)):
+        module = module.float()
+    return module
+
+
 def _torch_load_compat(torch_mod: Any, path: str) -> Any:
     """Load legacy Seed-VC checkpoints under PyTorch 2.6+ where `weights_only=True` by default."""
     try:
@@ -914,19 +939,19 @@ class SeedVCVoicePipeline(VoicePipeline):
             hift_state = _load_hift_state()
             feat_ext, w2v = _load_xlsr_pair()
 
-        _load_seedvc_state_dict(model, dit_state)
+        _load_seedvc_state_dict(model, _cast_state_to_float32(dit_state, torch))
         for key in model:
             model[key].eval()
-            model[key].to(device)
+            model[key] = _to_device_float32(model[key], device)
         model.cfm.estimator.setup_caches(max_batch_size=1, max_seq_length=8192)
 
-        campplus_model.load_state_dict(campplus_state)
+        campplus_model.load_state_dict(_cast_state_to_float32(campplus_state, torch))
         campplus_model.eval()
-        campplus_model.to(device)
+        campplus_model = _to_device_float32(campplus_model, device)
 
-        hift_gen.load_state_dict(hift_state)
+        hift_gen.load_state_dict(_cast_state_to_float32(hift_state, torch))
         hift_gen.eval()
-        hift_gen.to(device)
+        hift_gen = _to_device_float32(hift_gen, device)
         vocoder_fn = hift_gen
 
         if len(w2v.encoder.layers) > output_layer:

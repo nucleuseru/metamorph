@@ -122,7 +122,7 @@ To pre-warm a `max-autotune-no-cudagraphs` GPU compile archive once per GPU SKU 
 /app/scripts/prewarm_cache.sh --res 840x480
 ```
 
-Voice-only images (`:voice`) bake pruned, fp16-optimized Seed-VC checkpoints into `/app/bundled_models/seed-vc` by default (`BUNDLE_VOICE_WEIGHTS=1`), eliminating FUSE and HuggingFace API calls during voice startup.
+Voice-only images (`:voice`) bake pruned XLSR-L12 and stripped full-precision Seed-VC checkpoints into `/app/bundled_models/seed-vc` by default (`BUNDLE_VOICE_WEIGHTS=1`), eliminating FUSE and HuggingFace API calls during voice startup.
 
 ### CI/CD (GitHub Actions -> Docker Hub)
 
