@@ -134,38 +134,60 @@ class AssetLoader:
         return url.strip()
 
     async def fetch_url(self, url: str, max_bytes: int) -> bytes:
-        """Download an HTTP/HTTPS asset enforcing timeout and strict max byte size."""
-        valid_url = self.validate_url(url)
+        """Download an HTTP/HTTPS asset enforcing timeout, redirect SSRF checks, and max size."""
+        current_url = self.validate_url(url)
         client_kwargs: dict[str, Any] = {
             "timeout": self._settings.asset_download_timeout_s,
-            "follow_redirects": True,
+            "follow_redirects": False,
         }
         if self._http_transport is not None:
             client_kwargs["transport"] = self._http_transport
 
+        max_redirects = 5
         chunks: list[bytes] = []
         total = 0
         try:
-            async with (
-                httpx.AsyncClient(**client_kwargs) as client,
-                client.stream("GET", valid_url) as response,
-            ):
-                response.raise_for_status()
-                content_length = response.headers.get("content-length")
-                if content_length is not None and int(content_length) > max_bytes:
-                    raise AssetError(
-                        f"Asset exceeds max allowed size ({content_length} > {max_bytes} bytes)."
-                    )
-                async for chunk in response.aiter_bytes():
-                    total += len(chunk)
-                    if total > max_bytes:
-                        raise AssetError(f"Asset exceeds max allowed size ({max_bytes} bytes).")
-                    chunks.append(chunk)
+            async with httpx.AsyncClient(**client_kwargs) as client:
+                for _ in range(max_redirects + 1):
+                    async with client.stream("GET", current_url) as response:
+                        if (
+                            response.status_code in {301, 302, 303, 307, 308}
+                            and "location" in response.headers
+                        ):
+                            next_url = str(response.url.join(response.headers["location"]))
+                            current_url = self.validate_url(next_url)
+                            continue
+                        response.raise_for_status()
+                        content_length = response.headers.get("content-length")
+                        if content_length is not None:
+                            try:
+                                declared_len = int(content_length)
+                            except ValueError as exc:
+                                msg = f"Invalid Content-Length header: {content_length!r}"
+                                raise AssetError(msg) from exc
+                            if declared_len < 0:
+                                raise AssetError(
+                                    f"Invalid negative Content-Length header: {content_length!r}"
+                                )
+                            if declared_len > max_bytes:
+                                msg = (
+                                    "Asset exceeds max allowed size "
+                                    f"({declared_len} > {max_bytes} bytes)."
+                                )
+                                raise AssetError(msg)
+                        async for chunk in response.aiter_bytes():
+                            total += len(chunk)
+                            if total > max_bytes:
+                                raise AssetError(
+                                    f"Asset exceeds max allowed size ({max_bytes} bytes)."
+                                )
+                            chunks.append(chunk)
+                        return b"".join(chunks)
+                raise AssetError("Too many redirects fetching reference asset.")
         except AssetError:
             raise
         except httpx.HTTPError as exc:
             raise AssetError(f"Failed to fetch reference asset from URL: {exc}") from exc
-        return b"".join(chunks)
 
     @staticmethod
     def decode_base64_payload(value: str, max_bytes: int) -> bytes:

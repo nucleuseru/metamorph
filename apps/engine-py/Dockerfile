@@ -96,8 +96,7 @@ RUN chmod +x /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/
     && mkdir -p /app/bundled_models \
     && if [ "${BUNDLE_VOICE_WEIGHTS}" = "1" ]; then \
         ENGINE_VOICE_CACHE_DIR=/app/bundled_models/seed-vc \
-        /app/scripts/download_models.sh --voice --prune-xlsr --remove-unpruned-xlsr --optimize-voice-ckpts \
-        && rm -f /app/bundled_models/seed-vc/campplus_cn_common.bin \
+        /app/scripts/download_models.sh --voice --skip-campplus --prune-xlsr --remove-unpruned-xlsr --optimize-voice-ckpts \
         && rm -rf /root/.cache/huggingface; \
     fi
 
@@ -105,7 +104,7 @@ COPY packages/shared-py/src ./packages/shared-py/src
 COPY apps/engine-py/src ./apps/engine-py/src
 
 # Prune unused triton/headers/static libs/bytecode from .venv while keeping DT_NEEDED CUDA .so libs intact
-RUN uv sync --frozen --no-dev --inexact --package metamorph-engine \
+RUN uv pip install --python /app/.venv/bin/python --no-cache --no-deps --editable ./packages/shared-py --editable ./apps/engine-py \
     && uv pip uninstall --python /app/.venv/bin/python triton || true \
     && rm -rf \
         /app/.venv/lib/python3.12/site-packages/torch/include \
@@ -145,7 +144,7 @@ COPY apps/engine-py/scripts ./scripts
 
 RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py /app/scripts/optimize_voice_checkpoints.py \
     && mkdir -p /models \
-    && python -c "import torch, torchaudio, transformers, av, scipy, metamorph_engine"
+    && python -c "import torch, torchaudio, transformers, av, scipy, einops, munch, yaml, huggingface_hub, metamorph_engine"
 
 ENV ENGINE_BACKEND=gpu \
     ENGINE_ASYNC_STARTUP=true \
@@ -167,7 +166,7 @@ ENTRYPOINT ["/app/docker/entrypoint.sh"]
 # ==============================================================================
 FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04 AS full-builder
 
-ARG CUDA_ARCHS="89;120a"
+ARG CUDA_ARCHS="89;90a;100a;120a"
 ARG BUILD_FP8=1
 ARG INSTALL_SAGE_ATTN=1
 ARG SAGE_CUDA_ARCH_LIST="12.0"
@@ -222,6 +221,7 @@ RUN uv sync --frozen --no-dev --no-install-workspace --package metamorph-engine 
         munch==4.0.0 \
         pyyaml>=6.0.2 \
         scipy>=1.13.0 \
+        "nvidia-nvjpeg-cu12>=12.3.5,<13" \
         ninja==1.13.0 \
         packaging \
         "setuptools<82" \
@@ -272,8 +272,8 @@ RUN if [ "${INSTALL_FA4}" = "1" ]; then \
 COPY packages/shared-py/src ./packages/shared-py/src
 COPY apps/engine-py/src ./apps/engine-py/src
 
-# Sync workspace packages into .venv and prune non-runtime artifacts (keep triton, torch/include, torch/bin)
-RUN uv sync --frozen --no-dev --inexact --package metamorph-engine \
+# Install workspace packages into .venv without clobbering pinned numpy/pillow/CUDA wheels
+RUN uv pip install --python /app/.venv/bin/python --no-cache --no-deps --editable ./packages/shared-py --editable ./apps/engine-py \
     && rm -rf \
         /app/.venv/lib/python3.12/site-packages/torch/test \
         /app/.venv/lib/python3.12/site-packages/torch/share \
@@ -291,7 +291,7 @@ ARG INSTALL_SAGE_ATTN=1
 ENV DEBIAN_FRONTEND=noninteractive \
     UV_PYTHON_INSTALL_DIR=/opt/uv-python \
     PATH="/app/.venv/bin:$PATH" \
-    LD_LIBRARY_PATH="/app/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cublas/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib:/app/.venv/lib/python3.12/site-packages/torch/lib" \
+    LD_LIBRARY_PATH="/app/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cublas/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cudnn/lib:/app/.venv/lib/python3.12/site-packages/nvidia/nvjpeg/lib:/app/.venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:/app/.venv/lib/python3.12/site-packages/nvidia/nvjitlink/lib:/app/.venv/lib/python3.12/site-packages/torch/lib" \
     PYTHONUNBUFFERED=1 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -319,7 +319,7 @@ COPY apps/engine-py/scripts ./scripts
 
 RUN chmod +x /app/docker/entrypoint.sh /app/scripts/download_models.sh /app/scripts/prewarm_cache.sh /app/scripts/prune_xlsr.py /app/scripts/optimize_voice_checkpoints.py \
     && mkdir -p /models \
-    && python -c "import torch, torchvision, torchaudio, transformers, diffusers, av, scipy, metamorph_engine, joyomni_ops; print('full runtime ok:', torch.__version__)" \
+    && python -c "import ctypes, torch, torchvision, torchaudio, transformers, diffusers, av, cv2, numpy, PIL, scipy, metamorph_engine, joyomni_ops; assert numpy.__version__ == '2.2.6' and PIL.__version__ == '12.2.0'; ctypes.CDLL('libnvjpeg.so.12'); print('full runtime ok:', torch.__version__, numpy.__version__, PIL.__version__)" \
     && if [ "${INSTALL_SAGE_ATTN}" = "1" ]; then python -c "import sageattention"; fi
 
 ENV ENGINE_BACKEND=gpu \

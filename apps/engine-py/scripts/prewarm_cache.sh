@@ -97,15 +97,40 @@ pipe.close()
 done
 
 # Force synchronous atomic archive write-back (overwriting any lower-tier archive)
-rm -f "${JOYOMNI_VOLUME_CACHE_ROOT}.compile_mode"
+PREWARM_LOCAL_CACHE_ROOT="$JOYOMNI_CACHE_ROOT" \
+PREWARM_VOLUME_CACHE_ROOT="$JOYOMNI_VOLUME_CACHE_ROOT" \
+PREWARM_COMPILE_MODE="$COMPILE_MODE" \
+PREWARM_RESOLUTIONS="${RESOLUTIONS[*]}" \
+PREWARM_BOTH_ORIENTATIONS="$BOTH_ORIENTATIONS" \
 "$PYTHON_BIN" -c "
+import os
 from pathlib import Path
 from metamorph_engine.pipelines.video_joyai import _persist_compile_cache_archive
 
+try:
+    from xvideo.serving.serve_joyomni_streaming import _snap_to_align
+except Exception:
+    def _snap_to_align(val: int, align: int = 24) -> int:
+        return max(align, ((val + align // 2) // align) * align)
+
+both = os.environ.get('PREWARM_BOTH_ORIENTATIONS', 'false').lower() == 'true'
+warmed_shapes: list[tuple[int, int]] = []
+for token in os.environ.get('PREWARM_RESOLUTIONS', '').split():
+    if 'x' not in token:
+        continue
+    w_str, h_str = token.split('x', 1)
+    w = _snap_to_align(int(w_str), 24)
+    h = _snap_to_align(int(h_str), 24)
+    warmed_shapes.append((w, h))
+    if both and w != h:
+        warmed_shapes.append((h, w))
+
 out = _persist_compile_cache_archive(
-    local_cache_root=Path('${JOYOMNI_CACHE_ROOT}'),
-    volume_cache_root=Path('${JOYOMNI_VOLUME_CACHE_ROOT}'),
-    compile_mode='${COMPILE_MODE}',
+    local_cache_root=Path(os.environ['PREWARM_LOCAL_CACHE_ROOT']),
+    volume_cache_root=Path(os.environ['PREWARM_VOLUME_CACHE_ROOT']),
+    compile_mode=os.environ['PREWARM_COMPILE_MODE'],
+    warmed_shapes=warmed_shapes,
+    force=True,
 )
 if out is None:
     raise SystemExit('Failed to persist compile cache archive')

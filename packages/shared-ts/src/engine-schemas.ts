@@ -3,10 +3,10 @@ import { Schema } from "effect";
 export const Modality = Schema.Literals(["voice", "video"]);
 export type Modality = typeof Modality.Type;
 
-export const VideoCodecName = Schema.Literals(["h264", "mjpeg"]);
+export const VideoCodecName = Schema.Literals(["mjpeg"]);
 export type VideoCodecName = typeof VideoCodecName.Type;
 
-export const AudioCodecName = Schema.Literals(["pcm_s16le", "pcm_f32le"]);
+export const AudioCodecName = Schema.Literals(["pcm_s16le"]);
 export type AudioCodecName = typeof AudioCodecName.Type;
 
 export const DetectionMode = Schema.Literals(["off", "near", "full"]);

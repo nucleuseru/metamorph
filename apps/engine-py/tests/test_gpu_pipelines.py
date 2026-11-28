@@ -889,10 +889,10 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
     pipe.set_reference_audio(np.ones(22050, dtype=np.float32) * 0.1, 22050)
     assert pipe.has_reference_audio is True
 
-    # Silent chunk (400ms = 20 * 441 = 8820 samples) -> VAD marks SILENCE without running cfm
+    # Silent chunk (320ms = 16 * 441 = 7056 samples) -> VAD marks SILENCE without running cfm
     silent_outs = sess.push_audio(
         AudioChunkIn(
-            samples=np.zeros(8820, dtype=np.float32),
+            samples=np.zeros(7056, dtype=np.float32),
             sample_rate=22050,
             codec=AudioCodec.PCM_S16LE,
             seq=1,
@@ -903,21 +903,21 @@ def test_seedvc_warmup_exercises_infer_window_and_vocoder_runs_outside_autocast(
     assert bool(silent_outs[0].flags & FrameFlags.SILENCE) is True
     assert state["cfm_calls"] == 1
 
-    # Voiced chunk -> runs infer_window with full 30 steps + HiFT outside autocast
-    voiced = (0.2 * np.sin(2.0 * np.pi * 220.0 * np.arange(8820) / 22050.0)).astype(np.float32)
+    # Voiced chunk -> runs infer_window with balanced 20 steps + HiFT outside autocast
+    voiced = (0.2 * np.sin(2.0 * np.pi * 220.0 * np.arange(7056) / 22050.0)).astype(np.float32)
     voiced_outs = sess.push_audio(
         AudioChunkIn(
             samples=voiced,
             sample_rate=22050,
             codec=AudioCodec.PCM_S16LE,
             seq=2,
-            pts_us=400_000,
+            pts_us=320_000,
         )
     )
     assert len(voiced_outs) == 1
     assert bool(voiced_outs[0].flags & FrameFlags.SPEECH_ACTIVE) is True
     assert state["cfm_calls"] == 2
-    assert state["diffusion_steps"] == [2, 30]
+    assert state["diffusion_steps"] == [2, 20]
     assert state["hift_autocast_depths"] == [0, 0]
     assert state["hift_dtypes"] == [np.float32, np.float32]
 
@@ -1012,18 +1012,18 @@ def test_prepare_reference_audio_trims_silence_removes_dc_and_normalizes() -> No
 
 
 def test_voice_engine_defaults_favor_high_clarity() -> None:
-    """Verify maxed-out default Seed-VC & fast startup parameters stay internally consistent."""
+    """Verify balanced 20-step Seed-VC & fast startup parameters stay internally consistent."""
     settings = EngineSettings()
-    assert settings.voice_diffusion_steps == 30
+    assert settings.voice_diffusion_steps == 20
     assert settings.voice_warmup_diffusion_steps == 2
     assert settings.voice_parallel_load is True
     assert settings.voice_cfg_rate == 0.7
-    assert settings.voice_max_prompt_length_s == 15.0
-    assert settings.voice_extra_context_left_s == 5.0
-    assert settings.voice_extra_dit_context_left_s == 2.5
-    assert settings.voice_extra_context_right_s == 0.16
+    assert settings.voice_max_prompt_length_s == 8.0
+    assert settings.voice_extra_context_left_s == 3.0
+    assert settings.voice_extra_dit_context_left_s == 1.5
+    assert settings.voice_extra_context_right_s == 0.12
     assert settings.voice_crossfade_s == 0.08
-    assert settings.voice_block_time_s == 0.40
+    assert settings.voice_block_time_s == 0.32
     assert settings.voice_vad_hangover_s == 0.5
     assert settings.voice_vad_threshold_db == -48.0
     assert settings.video_compile_mode == "auto"
@@ -1110,10 +1110,17 @@ def test_seedvc_load_xlsr_short_circuits_local_and_prefers_pruned_fp16(tmp_path:
     ]
 
 
-def test_joyai_compile_mode_resolution_and_cache_archive_persistence(tmp_path: Path) -> None:
-    """Auto compile mode avoids cold max-autotune, reuses seeded mode, and never downgrades."""
+def test_joyai_compile_mode_resolution_and_cache_archive_persistence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto compile mode reuses seeded cache, tracks multi-res shapes, and tolerates tar rc=1."""
+    import subprocess
+    import threading
+
     from metamorph_engine.pipelines.video_joyai import (
         _CACHE_MODE_MARKER,
+        _CACHE_SHAPES_MARKER,
         _persist_compile_cache_archive,
         _resolve_video_compile_mode,
     )
@@ -1133,21 +1140,24 @@ def test_joyai_compile_mode_resolution_and_cache_archive_persistence(tmp_path: P
         _resolve_video_compile_mode("auto", cache_root=local_cache) == "max-autotune-no-cudagraphs"
     )
 
-    # Persist archive to persistent volume
+    # Persist archive with initial resolution 840x480
     vol_cache = tmp_path / "volume" / "cache" / "nvidia_rtx_5090"
     archive = _persist_compile_cache_archive(
         local_cache_root=local_cache,
         volume_cache_root=vol_cache,
         compile_mode="default",
+        warmed_shapes=[(840, 480)],
     )
     assert archive is not None and archive.is_file()
     assert Path(f"{vol_cache}.compile_mode").read_text(encoding="utf-8").strip() == "default"
+    assert Path(f"{vol_cache}.shapes").read_text(encoding="utf-8").splitlines() == ["840x480"]
 
     # Upgrading default -> max-autotune-no-cudagraphs succeeds
     upgraded = _persist_compile_cache_archive(
         local_cache_root=local_cache,
         volume_cache_root=vol_cache,
         compile_mode="max-autotune-no-cudagraphs",
+        warmed_shapes=[(840, 480)],
     )
     assert upgraded is not None and upgraded.is_file()
     assert (
@@ -1155,13 +1165,102 @@ def test_joyai_compile_mode_resolution_and_cache_archive_persistence(tmp_path: P
         == "max-autotune-no-cudagraphs"
     )
 
-    # Downgrading max-autotune-no-cudagraphs -> default is skipped
+    # Duplicate persist with same mode & subset shape is skipped
+    assert (
+        _persist_compile_cache_archive(
+            local_cache_root=local_cache,
+            volume_cache_root=vol_cache,
+            compile_mode="max-autotune-no-cudagraphs",
+            warmed_shapes=[(840, 480)],
+        )
+        is None
+    )
+
+    # New resolution in the same local cache (which retained 840x480) updates archive + .shapes
+    new_shape = _persist_compile_cache_archive(
+        local_cache_root=local_cache,
+        volume_cache_root=vol_cache,
+        compile_mode="max-autotune-no-cudagraphs",
+        warmed_shapes=[(1280, 720)],
+    )
+    assert new_shape is not None
+    assert sorted(Path(f"{vol_cache}.shapes").read_text(encoding="utf-8").splitlines()) == [
+        "1280x720",
+        "840x480",
+    ]
+    assert sorted(
+        (local_cache / _CACHE_SHAPES_MARKER).read_text(encoding="utf-8").splitlines()
+    ) == [
+        "1280x720",
+        "840x480",
+    ]
+
+    # Downgrading max-autotune-no-cudagraphs -> default with subset shapes is skipped
     downgrade = _persist_compile_cache_archive(
         local_cache_root=local_cache,
         volume_cache_root=vol_cache,
         compile_mode="default",
+        warmed_shapes=[(840, 480)],
     )
     assert downgrade is None
+
+    # force=True overwrites even when mode & shapes already match
+    forced = _persist_compile_cache_archive(
+        local_cache_root=local_cache,
+        volume_cache_root=vol_cache,
+        compile_mode="max-autotune-no-cudagraphs",
+        warmed_shapes=[(1280, 720)],
+        force=True,
+    )
+    assert forced is not None
+
+    # GNU tar exit-code 1 (live write race) retries & succeeds; exit-code 2 fails cleanly
+    real_run: Any = subprocess.run
+    tar_calls = {"n": 0}
+
+    def _flaky_tar(cmd: list[str], **kw: Any) -> Any:
+        if cmd and cmd[0] == "tar":
+            tar_calls["n"] += 1
+            res = real_run(cmd, **{**kw, "check": False})
+            if tar_calls["n"] <= 2:
+                return subprocess.CompletedProcess(
+                    cmd, 1, res.stdout, b"file changed as we read it"
+                )
+            return subprocess.CompletedProcess(cmd, 2, res.stdout, b"fatal tar error")
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(subprocess, "run", _flaky_tar)
+    rc1_ok = _persist_compile_cache_archive(
+        local_cache_root=local_cache,
+        volume_cache_root=vol_cache,
+        compile_mode="max-autotune-no-cudagraphs",
+        force=True,
+    )
+    assert rc1_ok is not None and tar_calls["n"] == 2
+    rc2_fail = _persist_compile_cache_archive(
+        local_cache_root=local_cache,
+        volume_cache_root=vol_cache,
+        compile_mode="max-autotune-no-cudagraphs",
+        force=True,
+    )
+    assert rc2_fail is None
+
+    # Pipeline.close() waits for its background persist thread
+    release_bg = threading.Event()
+    started_bg = threading.Event()
+
+    def _bg_worker() -> None:
+        started_bg.set()
+        release_bg.wait(timeout=2.0)
+
+    bg_thread = threading.Thread(target=_bg_worker, daemon=True)
+    bg_thread.start()
+    started_bg.wait(timeout=1.0)
+    pipe = JoyAIVideoPipeline(EngineSettings(backend="mock"))
+    pipe._persist_thread = bg_thread
+    release_bg.set()
+    pipe.close()
+    assert bg_thread.is_alive() is False
 
 
 def test_joyai_hooks_single_orientation_skip_ref_compile_and_eager_ref_encode(
@@ -1290,38 +1389,102 @@ def test_joyai_fuse_safetensors_loader_disables_mmap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify FUSE safetensors patch injects disable_mmap=True and bypasses load_file mmap."""
+    """Verify FUSE safetensors patch bypasses mmap for safe_open & load_file across bindings."""
+    import json
+    import struct
+
     from metamorph_engine.pipelines.video_joyai import _patch_fuse_safetensors_loaders
 
-    seen_qwen_kwargs: list[dict[str, Any]] = []
+    orig_calls: list[tuple[str, str]] = []
     seen_bytes_loads: list[bytes] = []
 
-    class _FakeQwen:
-        @staticmethod
-        def from_pretrained(path: str, **kwargs: Any) -> str:
-            seen_qwen_kwargs.append({"path": path, **kwargs})
-            return "qwen_model"
+    arr = np.array([[1.5, -2.5], [3.0, 4.0]], dtype="<f4")
+    raw_tensor = arr.tobytes()
+    header_obj = {
+        "__metadata__": {"format": "pt"},
+        "w": {"dtype": "F32", "shape": [2, 2], "data_offsets": [0, len(raw_tensor)]},
+    }
+    header_bytes = json.dumps(header_obj).encode("utf-8")
+    st_bytes = struct.pack("<Q", len(header_bytes)) + header_bytes + raw_tensor
+    st_file = tmp_path / "model.safetensors"
+    st_file.write_bytes(st_bytes)
 
-    fake_tf = _make_module("transformers", Qwen2_5_VLForConditionalGeneration=_FakeQwen)
-    fake_st_torch = _make_module(
-        "safetensors.torch",
-        load_file=lambda filename, device="cpu": {"via": "mmap"},
-        load=lambda raw: (seen_bytes_loads.append(raw), {"via": "bytes"})[1],
+    def _orig_safe_open(filename: str, framework: str = "pt", device: Any = "cpu") -> str:
+        orig_calls.append((str(filename), str(device)))
+        return f"mmap-open:{device}"
+
+    def _orig_load_file(filename: str, device: Any = "cpu") -> dict[str, Any]:
+        orig_calls.append((str(filename), str(device)))
+        return {"via": f"mmap:{device}"}
+
+    def _load_bytes(raw: bytes) -> dict[str, Any]:
+        seen_bytes_loads.append(raw)
+        h_len = struct.unpack("<Q", raw[:8])[0]
+        hdr = json.loads(raw[8 : 8 + h_len].decode("utf-8"))
+        payload = raw[8 + h_len :]
+        out: dict[str, Any] = {}
+        for k, meta in hdr.items():
+            if k == "__metadata__":
+                continue
+            lo, hi = meta["data_offsets"]
+            out[k] = np.frombuffer(payload[lo:hi], dtype="<f4").reshape(meta["shape"]).copy()
+        return out
+
+    fake_st = _make_module("safetensors", safe_open=_orig_safe_open)
+    fake_st_torch = _make_module("safetensors.torch", load_file=_orig_load_file, load=_load_bytes)
+    fake_tf_mu = _make_module("transformers.modeling_utils", safe_open=_orig_safe_open)
+    fake_tf_core = _make_module("transformers.core_model_loading", safe_open=_orig_safe_open)
+    fake_df_mu = _make_module("diffusers.models.modeling_utils", safe_open=_orig_safe_open)
+    fake_tf = _make_module(
+        "transformers", modeling_utils=fake_tf_mu, core_model_loading=fake_tf_core
     )
-    monkeypatch.setitem(sys.modules, "transformers", fake_tf)
-    monkeypatch.setitem(sys.modules, "safetensors.torch", fake_st_torch)
+    fake_df = _make_module("diffusers", models=_make_module("diffusers.models"))
 
-    st_file = tmp_path / "vae.safetensors"
-    st_file.write_bytes(b"safetensor-bytes")
+    for mod_name, mod_obj in (
+        ("safetensors", fake_st),
+        ("safetensors.torch", fake_st_torch),
+        ("transformers", fake_tf),
+        ("transformers.modeling_utils", fake_tf_mu),
+        ("transformers.core_model_loading", fake_tf_core),
+        ("diffusers", fake_df),
+        ("diffusers.models", fake_df.models),
+        ("diffusers.models.modeling_utils", fake_df_mu),
+    ):
+        monkeypatch.setitem(sys.modules, mod_name, mod_obj)
 
     with _patch_fuse_safetensors_loaders(disable_mmap=True, mmap_setting="true"):
-        assert _FakeQwen.from_pretrained("/models/mimo") == "qwen_model"
-        assert fake_st_torch.load_file(str(st_file), device="cpu") == {"via": "bytes"}
+        # Header-only inspection via transformers binding must NOT read full payload prematurely
+        with fake_tf_mu.safe_open(str(st_file), framework="pt", device="cpu") as f:
+            assert f.keys() == ["w"]
+            assert f.metadata() == {"format": "pt"}
+            slc = f.get_slice("w")
+            assert slc.get_shape() == [2, 2]
+            assert slc.get_dtype() == "F32"
+            assert seen_bytes_loads == []
+            np.testing.assert_allclose(slc[0], arr[0])
+            np.testing.assert_allclose(f.get_tensor("w"), arr)
 
-    assert seen_qwen_kwargs == [{"path": "/models/mimo", "disable_mmap": True}]
-    assert seen_bytes_loads == [b"safetensor-bytes"]
-    # Originals restored on context exit
-    assert fake_st_torch.load_file(str(st_file), device="cpu") == {"via": "mmap"}
+        # Diffusers module binding also uses sequential buffered reader
+        with fake_df_mu.safe_open(str(st_file), framework="pt", device="cpu") as f2:
+            np.testing.assert_allclose(f2.get_tensor("w"), arr)
+
+        assert orig_calls == []
+        loaded_cpu = fake_st_torch.load_file(str(st_file), device="cpu")
+        np.testing.assert_allclose(loaded_cpu["w"], arr)
+        assert len(seen_bytes_loads) == 3
+
+        # Non-CPU device falls through to orig_safe_open / orig_load_file
+        assert (
+            fake_st.safe_open(str(st_file), framework="pt", device="cuda:0") == "mmap-open:cuda:0"
+        )
+        assert fake_st_torch.load_file(str(st_file), device="cuda:0") == {"via": "mmap:cuda:0"}
+
+    # Originals restored on context exit across every module
+    assert fake_st.safe_open is _orig_safe_open
+    assert fake_tf_mu.safe_open is _orig_safe_open
+    assert fake_tf_core.safe_open is _orig_safe_open
+    assert fake_df_mu.safe_open is _orig_safe_open
+    assert fake_st_torch.load_file is _orig_load_file
 
 
 def test_seedvc_librosa_mel_shim_produces_slaney_filterbank(
@@ -1486,3 +1649,490 @@ def test_seedvc_cast_state_to_float32_and_to_device_float32() -> None:
     mod = _to_device_float32(_FakeModule(), "cuda:0")
     assert isinstance(mod, _FakeModule)
     assert calls == ["to:cuda:0", "float"]
+
+
+def test_joyai_session_drops_corrupt_jpeg_frame() -> None:
+    """Corrupt JPEG payloads return VideoGateEvent(reason='invalid_frame') instead of crashing."""
+    inner_calls: list[Any] = []
+
+    class _InnerSess:
+        def inflight_chunks(self) -> int:
+            return 0
+
+        def push_frame(self, image: Any, **kw: Any) -> None:
+            inner_calls.append((image, kw))
+
+    sess = object.__new__(JoyAIVideoSession)
+    sess._pipeline = JoyAIVideoPipeline(EngineSettings(backend="mock"))
+    sess._lock = __import__("threading").Lock()
+    sess._session = _InnerSess()
+
+    evt = sess.push_frame(
+        VideoFrameIn(b"corrupt-jpeg", VideoCodec.MJPEG, seq=1, pts_us=1000, flags=FrameFlags.NONE)
+    )
+    assert evt is not None
+    assert evt.event_type == "dropped"
+    assert evt.reason == "invalid_frame"
+    assert inner_calls == []
+
+
+def test_seedvc_cpu_fallback_cuda_stream_and_gpu_xlsr_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Verify CPU keeps w2v fp32, GPU XLSR normalizes in-tensor, tqdm silences, and stream runs."""
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    events: dict[str, Any] = {
+        "w2v_half_calls": 0,
+        "feat_ext_runtime_calls": 0,
+        "stream_enters": 0,
+        "w2v_input_dtype": None,
+        "w2v_normalized": None,
+        "cuda_available": False,
+    }
+
+    class _FakeTensor:
+        def __init__(self, data: np.ndarray) -> None:
+            self.arr = np.asarray(data)
+
+        @property
+        def shape(self) -> tuple[int, ...]:
+            return self.arr.shape
+
+        @property
+        def dtype(self) -> np.dtype[Any]:
+            return self.arr.dtype
+
+        @property
+        def device(self) -> str:
+            return "cuda:0" if events["cuda_available"] else "cpu"
+
+        def size(self, dim: int | None = None) -> Any:
+            return self.arr.shape if dim is None else self.arr.shape[dim]
+
+        def to(self, *args: Any, **kwargs: Any) -> _FakeTensor:
+            return self
+
+        def half(self) -> _FakeTensor:
+            return _FakeTensor(self.arr.astype(np.float16))
+
+        def float(self) -> _FakeTensor:
+            return _FakeTensor(self.arr.astype(np.float32))
+
+        def cpu(self) -> _FakeTensor:
+            return self
+
+        def numpy(self) -> np.ndarray:
+            return self.arr
+
+        def unsqueeze(self, dim: int) -> _FakeTensor:
+            return _FakeTensor(np.expand_dims(self.arr, axis=dim))
+
+        def mean(self, dim: int | None = None, keepdim: bool = False) -> _FakeTensor:
+            return _FakeTensor(self.arr.mean(axis=dim, keepdims=keepdim))
+
+        def __sub__(self, other: Any) -> _FakeTensor:
+            return _FakeTensor(self.arr - (other.arr if isinstance(other, _FakeTensor) else other))
+
+        def __add__(self, other: Any) -> _FakeTensor:
+            return _FakeTensor(self.arr + (other.arr if isinstance(other, _FakeTensor) else other))
+
+        def __truediv__(self, other: Any) -> _FakeTensor:
+            return _FakeTensor(self.arr / (other.arr if isinstance(other, _FakeTensor) else other))
+
+        def __pow__(self, power: Any) -> _FakeTensor:
+            return _FakeTensor(self.arr**power)
+
+    class _StreamCtx:
+        def __enter__(self) -> None:
+            events["stream_enters"] += 1
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+    class _FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return bool(events["cuda_available"])
+
+        @staticmethod
+        def Stream(device: Any = None) -> object:
+            return ("cuda_stream", device)
+
+        @staticmethod
+        def stream(_s: Any) -> _StreamCtx:
+            return _StreamCtx()
+
+    class _FakeDevice:
+        def __init__(self, spec: str) -> None:
+            self.type = "cuda" if "cuda" in spec else "cpu"
+
+    fake_torch = _make_module(
+        "torch",
+        float16=np.float16,
+        float32=np.float32,
+        cuda=_FakeCuda,
+        device=_FakeDevice,
+        no_grad=lambda: _StreamCtx(),
+        inference_mode=lambda: _StreamCtx(),
+        from_numpy=lambda arr: _FakeTensor(np.array(arr, dtype=np.float32)),
+        LongTensor=lambda vals: _FakeTensor(np.asarray(vals, dtype=np.int64)),
+        sqrt=lambda t: _FakeTensor(np.sqrt(t.arr).astype(np.float32)),
+        load=lambda path, **kw: {"net": {}},
+    )
+
+    class _FakeW2V:
+        def __init__(self) -> None:
+            self.encoder = types.SimpleNamespace(layers=list(range(24)))
+
+        def to(self, _d: Any) -> _FakeW2V:
+            return self
+
+        def eval(self) -> _FakeW2V:
+            return self
+
+        def half(self) -> _FakeW2V:
+            events["w2v_half_calls"] += 1
+            return self
+
+        def __call__(self, inp: _FakeTensor) -> Any:
+            events["w2v_input_dtype"] = inp.dtype
+            events["w2v_normalized"] = inp.arr.copy()
+            return types.SimpleNamespace(
+                last_hidden_state=_FakeTensor(np.zeros((1, 4, 1024), dtype=np.float32))
+            )
+
+    def _feat_ext(*_a: Any, **_kw: Any) -> Any:
+        events["feat_ext_runtime_calls"] += 1
+        raise AssertionError("CPU feature_extractor should not be invoked during live semantic_fn")
+
+    class _DummyMod:
+        def __init__(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        def load_state_dict(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        def eval(self) -> _DummyMod:
+            return self
+
+        def to(self, _d: Any) -> _DummyMod:
+            return self
+
+        def __call__(self, *_a: Any, **_kw: Any) -> Any:
+            return _FakeTensor(np.ones((1, 192), dtype=np.float32))
+
+    class _Reg:
+        def __init__(self) -> None:
+            self.eval = lambda: self
+            self.to = lambda _d: self
+
+        def __call__(self, *_a: Any, ylens: _FakeTensor, **_kw: Any) -> tuple[_FakeTensor]:
+            return (_FakeTensor(np.zeros((1, int(ylens.arr[0]), 384), dtype=np.float32)),)
+
+    class _CFM:
+        estimator = types.SimpleNamespace(setup_caches=lambda **_kw: None)
+
+        def state_dict(self) -> dict[str, Any]:
+            return {}
+
+        def load_state_dict(self, *_a: Any) -> None:
+            return None
+
+        def eval(self) -> _CFM:
+            return self
+
+        def to(self, _d: Any) -> _CFM:
+            return self
+
+    class _Munch(dict):
+        __getattr__ = dict.__getitem__
+        __setattr__ = dict.__setitem__
+
+    def _safe_load(fh: Any) -> dict[str, Any]:
+        if "hifigan" in getattr(fh, "name", ""):
+            return {"hift": {"sampling_rate": 22050}, "f0_predictor": {}}
+        return {
+            "preprocess_params": {
+                "sr": 22050,
+                "spect_params": {
+                    "n_fft": 1024,
+                    "win_length": 1024,
+                    "hop_length": 256,
+                    "n_mels": 80,
+                },
+            },
+            "model_params": {
+                "vocoder": {"type": "hifigan"},
+                "speech_tokenizer": {
+                    "type": "xlsr",
+                    "name": "facebook/wav2vec2-xls-r-300m",
+                    "output_layer": 12,
+                },
+            },
+        }
+
+    def _dl(*, filename: str, local_dir: str, **_kw: Any) -> str:
+        p = Path(local_dir) / filename
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"ckpt")
+        return str(p)
+
+    fm_mod = _make_module("modules.flow_matching", tqdm=lambda it, *a, **kw: ("wrapped", it))
+    fake_mods = {
+        "torch": fake_torch,
+        "torch.nn.functional": _make_module("torch.nn.functional"),
+        "torchaudio": _make_module(
+            "torchaudio",
+            functional=types.SimpleNamespace(
+                resample=lambda t, _o, _n: _FakeTensor(np.ones((1, 640), dtype=np.float32))
+            ),
+            compliance=types.SimpleNamespace(
+                kaldi=types.SimpleNamespace(
+                    fbank=lambda *_a, **_kw: _FakeTensor(np.ones((4, 80), dtype=np.float32))
+                )
+            ),
+        ),
+        "yaml": _make_module("yaml", safe_load=_safe_load),
+        "huggingface_hub": _make_module("huggingface_hub", hf_hub_download=_dl),
+        "transformers": _make_module(
+            "transformers",
+            Wav2Vec2FeatureExtractor=types.SimpleNamespace(from_pretrained=lambda _s: _feat_ext),
+            Wav2Vec2Model=types.SimpleNamespace(from_pretrained=lambda _s: _FakeW2V()),
+        ),
+        "modules": _make_module("modules"),
+        "modules.flow_matching": fm_mod,
+        "modules.commons": _make_module(
+            "modules.commons",
+            recursive_munch=lambda d: _Munch(
+                {k: (_Munch(v) if isinstance(v, dict) else v) for k, v in d.items()}
+            ),
+            build_model=lambda _p, stage="DiT": _Munch(
+                cfm=_CFM(),
+                length_regulator=_Reg(),
+            ),
+        ),
+        "modules.audio": _make_module(
+            "modules.audio",
+            mel_spectrogram=lambda *_a, **_kw: _FakeTensor(np.zeros((1, 80, 8), dtype=np.float32)),
+        ),
+        "modules.campplus": _make_module("modules.campplus"),
+        "modules.campplus.DTDNN": _make_module("modules.campplus.DTDNN", CAMPPlus=_DummyMod),
+        "modules.hifigan": _make_module("modules.hifigan"),
+        "modules.hifigan.generator": _make_module(
+            "modules.hifigan.generator", HiFTGenerator=_DummyMod
+        ),
+        "modules.hifigan.f0_predictor": _make_module(
+            "modules.hifigan.f0_predictor", ConvRNNF0Predictor=lambda **_kw: object()
+        ),
+    }
+    for k, v in fake_mods.items():
+        monkeypatch.setitem(sys.modules, k, v)
+    for mod_del in ("dac", "dac.nn", "dac.nn.quantize", "librosa", "librosa.filters"):
+        monkeypatch.delitem(sys.modules, mod_del, raising=False)
+
+    # CPU fallback with dtype="bfloat16": must resolve voice_dtype="auto" -> float32, no .half()
+    cpu_settings = EngineSettings(
+        backend="gpu",
+        enable_voice=True,
+        enable_video=False,
+        dtype="bfloat16",
+        warmup_on_startup=False,
+        voice_cache_dir=str(tmp_path / "cpu_cache"),
+    )
+    cpu_pipe = SeedVCVoicePipeline(cpu_settings)
+    cpu_pipe.warmup()
+    assert cpu_pipe.require_loaded().dtype == np.float32
+    assert events["w2v_half_calls"] == 0
+    # tqdm patched on modules.flow_matching to identity passthrough
+    assert list(fm_mod.tqdm([1, 2, 3], desc="steps")) == [1, 2, 3]
+
+    wave_raw = _FakeTensor(np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32))
+    cpu_pipe.require_loaded().semantic_fn(wave_raw)
+    assert events["feat_ext_runtime_calls"] == 0
+    assert events["w2v_input_dtype"] == np.float32
+    expected_norm = (wave_raw.arr - 2.5) / np.sqrt(np.mean((wave_raw.arr - 2.5) ** 2) + 1e-7)
+    np.testing.assert_allclose(np.asarray(events["w2v_normalized"]), expected_norm, atol=1e-5)
+
+    # CUDA enabled: set_reference_audio enters torch.cuda.stream(pipe.cuda_stream)
+    events["cuda_available"] = True
+    events["stream_enters"] = 0
+    gpu_pipe = SeedVCVoicePipeline(
+        EngineSettings(
+            backend="gpu",
+            enable_voice=True,
+            enable_video=False,
+            warmup_on_startup=False,
+            voice_cache_dir=str(tmp_path / "gpu_cache"),
+        )
+    )
+    gpu_pipe.warmup()
+    assert events["w2v_half_calls"] == 1
+    gpu_pipe.set_reference_audio(np.ones(22050, dtype=np.float32) * 0.2, 22050)
+    assert events["stream_enters"] >= 1
+
+
+def test_seedvc_load_xlsr_uses_dtype_kwarg_on_transformers_v5(tmp_path: Path) -> None:
+    """transformers v5 passes `dtype=` while older versions pass `torch_dtype=`."""
+    from metamorph_engine.pipelines.voice_seedvc import _load_xlsr_model
+
+    model_dir = tmp_path / "seedvc" / "facebook__wav2vec2-xls-r-300m-l12-fp16"
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model.safetensors").write_bytes(b"weights")
+
+    model_kwargs_seen: list[dict[str, Any]] = []
+
+    def _strict_v5_from_pretrained(
+        src: str, *, local_files_only: bool = False, dtype: Any = None
+    ) -> str:
+        del src, local_files_only
+        model_kwargs_seen.append({"dtype": dtype})
+        return "w2v_v5"
+
+    tf_v5 = _make_module(
+        "transformers",
+        __version__="5.20.2",
+        Wav2Vec2FeatureExtractor=types.SimpleNamespace(from_pretrained=lambda _s, **_kw: "feat"),
+        Wav2Vec2Model=types.SimpleNamespace(from_pretrained=_strict_v5_from_pretrained),
+    )
+    hf_hub = _make_module("huggingface_hub")
+    feat, w2v = _load_xlsr_model(
+        tf_v5,
+        hf_hub,
+        model_name="facebook/wav2vec2-xls-r-300m",
+        cache_dir=str(tmp_path / "seedvc"),
+        output_layer=12,
+        torch_dtype="fp16_v5",
+    )
+    assert (feat, w2v) == ("feat", "w2v_v5")
+    assert model_kwargs_seen == [{"dtype": "fp16_v5"}]
+
+
+def test_prune_xlsr_prunes_layers_casts_fp16_and_removes_src(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify scripts/prune_xlsr.py slices encoder to N layers, saves fp16, and removes src."""
+    import importlib.util
+    import json
+
+    script_path = REPO_ROOT / "apps" / "engine-py" / "scripts" / "prune_xlsr.py"
+    spec = importlib.util.spec_from_file_location("prune_xlsr", script_path)
+    assert spec is not None and spec.loader is not None
+    prune_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(prune_mod)
+
+    src_dir = tmp_path / "raw_xlsr"
+    dest_dir = tmp_path / "pruned_xlsr"
+    src_dir.mkdir()
+    (src_dir / "config.json").write_text("{}", encoding="utf-8")
+
+    saved_args: dict[str, Any] = {}
+
+    class _FakeModel:
+        def __init__(self) -> None:
+            self.encoder = types.SimpleNamespace(layers=list(range(24)))
+            self.config = types.SimpleNamespace(num_hidden_layers=24, torch_dtype="float32")
+            self.cast_dtype: Any = None
+
+        def to(self, *, dtype: Any) -> _FakeModel:
+            self.cast_dtype = dtype
+            return self
+
+        def eval(self) -> _FakeModel:
+            return self
+
+        def save_pretrained(self, out_dir: str, *, safe_serialization: bool = False) -> None:
+            saved_args["safe_serialization"] = safe_serialization
+            saved_args["layers"] = len(self.encoder.layers)
+            saved_args["config_layers"] = self.config.num_hidden_layers
+            saved_args["dtype"] = self.cast_dtype
+            p = Path(out_dir)
+            (p / "model.safetensors").write_bytes(b"pruned-fp16")
+            (p / "config.json").write_text(
+                json.dumps({"num_hidden_layers": self.config.num_hidden_layers}),
+                encoding="utf-8",
+            )
+
+    class _FakeFeatExt:
+        def save_pretrained(self, out_dir: str) -> None:
+            (Path(out_dir) / "preprocessor_config.json").write_text("{}", encoding="utf-8")
+
+    fake_torch = _make_module("torch", float16="fp16", bfloat16="bf16", float32="fp32")
+    fake_tf = _make_module(
+        "transformers",
+        Wav2Vec2FeatureExtractor=types.SimpleNamespace(
+            from_pretrained=lambda *_a, **_kw: _FakeFeatExt()
+        ),
+        Wav2Vec2Model=types.SimpleNamespace(from_pretrained=lambda *_a, **_kw: _FakeModel()),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+
+    rc = prune_mod.main(["--src", str(src_dir), "--dest", str(dest_dir), "--remove-src"])
+    assert rc == 0
+    assert saved_args == {
+        "safe_serialization": True,
+        "layers": 12,
+        "config_layers": 12,
+        "dtype": "fp16",
+    }
+    assert (dest_dir / "model.safetensors").is_file()
+    assert json.loads((dest_dir / "config.json").read_text(encoding="utf-8")) == {
+        "num_hidden_layers": 12
+    }
+    assert not src_dir.exists()
+
+
+def test_stateful_audio_resampler_preserves_continuity_and_spectrum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify StatefulAudioResampler has zero chunk-edge clicks and preserves sine spectrum."""
+    from metamorph_engine.pipelines.base import StatefulAudioResampler
+
+    # Force pure-NumPy SOS fallback branch to guarantee CPU-only behavior is always exercised
+    monkeypatch.setitem(sys.modules, "scipy", None)
+    monkeypatch.setitem(sys.modules, "scipy.signal", None)
+
+    sr_in = 48000
+    sr_mid = 22050
+    t = np.arange(sr_in, dtype=np.float32) / float(sr_in)
+    wave_48k = (0.6 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32)
+    chunks = [wave_48k[i : i + 960] for i in range(0, sr_in, 960)]
+
+    r_chunk = StatefulAudioResampler(sr_in, sr_mid)
+    r_whole = StatefulAudioResampler(sr_in, sr_mid)
+    down_chunks = [r_chunk.process(c) for c in chunks]
+    down_cat = np.concatenate(down_chunks)
+    down_ref = r_whole.process(wave_48k)
+
+    assert 22000 <= down_cat.size <= 22055
+    np.testing.assert_allclose(down_cat, down_ref, atol=1e-5)
+    # Continuous derivative across all 20ms chunk boundaries (no step click)
+    assert float(np.max(np.abs(np.diff(down_cat[200:])))) < 0.12
+
+    # Steady-state frequency correlation check at 440 Hz
+    steady = down_cat[1000:]
+    ts = np.arange(steady.size, dtype=np.float32) / float(sr_mid)
+    c440 = float(np.mean(steady * np.cos(2.0 * np.pi * 440.0 * ts)))
+    s440 = float(np.mean(steady * np.sin(2.0 * np.pi * 440.0 * ts)))
+    tone_rms = float(np.hypot(c440, s440)) * np.sqrt(2.0)
+    sig_rms = float(np.sqrt(np.mean(steady**2)))
+    assert tone_rms / sig_rms > 0.98
+
+    # Upsample back 22050 -> 48000 chunk-by-chunk & verify continuity
+    r_up_chunk = StatefulAudioResampler(sr_mid, sr_in)
+    r_up_whole = StatefulAudioResampler(sr_mid, sr_in)
+    up_cat = np.concatenate([r_up_chunk.process(c) for c in down_chunks])
+    up_ref = r_up_whole.process(down_ref)
+    np.testing.assert_allclose(up_cat, up_ref, atol=1e-5)
+    assert float(np.max(np.abs(np.diff(up_cat[400:])))) < 0.06
+
+    # reset() clears state and matches fresh instance
+    r_chunk.reset()
+    np.testing.assert_allclose(r_chunk.process(chunks[0]), down_chunks[0], atol=1e-6)
+
+    # Identity sample rate returns exact samples
+    r_id = StatefulAudioResampler(22050, 22050)
+    np.testing.assert_allclose(r_id.process(chunks[0]), chunks[0], atol=1e-7)

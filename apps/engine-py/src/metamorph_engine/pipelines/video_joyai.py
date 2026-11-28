@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import contextlib
 import importlib
-import inspect
 import io
+import json
 import logging
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from metamorph_engine.config import EngineSettings
 from metamorph_engine.pipelines.base import (
@@ -49,6 +50,7 @@ _NETWORK_OR_FUSE_FS_PREFIXES = (
 )
 
 _CACHE_MODE_MARKER = ".metamorph_compile_mode"
+_CACHE_SHAPES_MARKER = ".metamorph_warmed_shapes"
 _COMPILE_MODE_RANK: dict[str, int] = {
     "none": 0,
     "default": 1,
@@ -158,17 +160,44 @@ def _resolve_video_compile_mode(
     return "default"
 
 
+def _parse_shapes_marker(path: Path) -> set[tuple[int, int]]:
+    shapes: set[tuple[int, int]] = set()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return shapes
+    for token in text.split():
+        if "x" not in token:
+            continue
+        w_str, h_str = token.split("x", 1)
+        try:
+            w = int(w_str)
+            h = int(h_str)
+        except ValueError:
+            continue
+        if w > 0 and h > 0:
+            shapes.add((w, h))
+    return shapes
+
+
+def _format_shapes_marker(shapes: set[tuple[int, int]]) -> str:
+    return "".join(f"{w}x{h}\n" for w, h in sorted(shapes))
+
+
 def _persist_compile_cache_archive(
     *,
     local_cache_root: Path,
     volume_cache_root: Path,
     compile_mode: str,
+    warmed_shapes: Sequence[tuple[int, int]] = (),
+    force: bool = False,
 ) -> Path | None:
     """Pack local compile cache into an atomic `.tar.zst` (or `.tar.gz`) archive on the volume."""
     if compile_mode == "none" or not _dir_has_files(local_cache_root):
         return None
 
     mode_sidecar = Path(f"{volume_cache_root}.compile_mode")
+    shapes_sidecar = Path(f"{volume_cache_root}.shapes")
     use_zstd = shutil.which("zstd") is not None
     ext = ".tar.zst" if use_zstd else ".tar.gz"
     target_archive = Path(f"{volume_cache_root}{ext}")
@@ -178,10 +207,19 @@ def _persist_compile_cache_archive(
         Path(f"{volume_cache_root}.tar.zst").is_file()
         or Path(f"{volume_cache_root}.tar.gz").is_file()
     )
+    existing_shapes = _parse_shapes_marker(shapes_sidecar)
+    local_shapes = _parse_shapes_marker(local_cache_root / _CACHE_SHAPES_MARKER)
+    requested_shapes = {
+        (int(w), int(h)) for w, h in warmed_shapes if int(w) > 0 and int(h) > 0
+    } | local_shapes
+    persisted_shapes = requested_shapes
+
     if (
-        existing_archive
+        not force
+        and existing_archive
         and existing_mode is not None
         and _COMPILE_MODE_RANK.get(existing_mode, -1) >= _COMPILE_MODE_RANK.get(compile_mode, 0)
+        and requested_shapes.issubset(existing_shapes)
     ):
         logger.info(
             "Persistent compile cache archive already exists at %s (mode=%s >= %s); skipping.",
@@ -191,11 +229,23 @@ def _persist_compile_cache_archive(
         )
         return None
 
+    persisted_mode = (
+        compile_mode
+        if force
+        or existing_mode is None
+        or _COMPILE_MODE_RANK.get(compile_mode, 0) >= _COMPILE_MODE_RANK.get(existing_mode, -1)
+        else existing_mode
+    )
+
     t0 = time.monotonic()
     local_tmp: Path | None = None
     volume_tmp: Path | None = None
     try:
-        (local_cache_root / _CACHE_MODE_MARKER).write_text(f"{compile_mode}\n", encoding="utf-8")
+        (local_cache_root / _CACHE_MODE_MARKER).write_text(f"{persisted_mode}\n", encoding="utf-8")
+        if persisted_shapes:
+            (local_cache_root / _CACHE_SHAPES_MARKER).write_text(
+                _format_shapes_marker(persisted_shapes), encoding="utf-8"
+            )
         volume_cache_root.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             prefix="metamorph-cache-",
@@ -209,7 +259,22 @@ def _persist_compile_cache_archive(
             if use_zstd
             else ["tar", "-czf", str(local_tmp), "-C", str(local_cache_root), "."]
         )
-        subprocess.run(tar_cmd, check=True, capture_output=True)
+        for attempt in range(2):
+            proc = subprocess.run(tar_cmd, check=False, capture_output=True)
+            if proc.returncode == 0:
+                break
+            if proc.returncode == 1 and attempt == 0:
+                time.sleep(0.25)
+                continue
+            if proc.returncode == 1 and local_tmp.is_file() and local_tmp.stat().st_size > 0:
+                logger.warning(
+                    "tar reported file modified while archiving %s; continuing with archive.",
+                    local_cache_root,
+                )
+                break
+            raise subprocess.CalledProcessError(
+                proc.returncode, tar_cmd, output=proc.stdout, stderr=proc.stderr
+            )
 
         volume_tmp = Path(f"{target_archive}.tmp.{os.getpid()}")
         shutil.copyfile(local_tmp, volume_tmp)
@@ -217,15 +282,21 @@ def _persist_compile_cache_archive(
         volume_tmp = None
 
         sidecar_tmp = Path(f"{mode_sidecar}.tmp.{os.getpid()}")
-        sidecar_tmp.write_text(f"{compile_mode}\n", encoding="utf-8")
+        sidecar_tmp.write_text(f"{persisted_mode}\n", encoding="utf-8")
         os.replace(sidecar_tmp, mode_sidecar)
+
+        if persisted_shapes:
+            shapes_tmp = Path(f"{shapes_sidecar}.tmp.{os.getpid()}")
+            shapes_tmp.write_text(_format_shapes_marker(persisted_shapes), encoding="utf-8")
+            os.replace(shapes_tmp, shapes_sidecar)
 
         size_mb = target_archive.stat().st_size / (1024 * 1024)
         logger.info(
-            "Persisted compile cache archive %s (%.1f MiB, mode=%s) in %.1fs",
+            "Persisted compile cache archive %s (%.1f MiB, mode=%s, shapes=%d) in %.1fs",
             target_archive,
             size_mb,
-            compile_mode,
+            persisted_mode,
+            len(persisted_shapes),
             time.monotonic() - t0,
         )
         return target_archive
@@ -245,31 +316,44 @@ def _persist_compile_cache_archive(
                 volume_tmp.unlink()
 
 
-def _schedule_compile_cache_persist(compile_mode: str, *, enabled: bool) -> None:
-    """Record compile mode marker locally and asynchronously archive cache to persistent volume."""
+def _schedule_compile_cache_persist(
+    compile_mode: str,
+    *,
+    enabled: bool,
+    warmed_shapes: Sequence[tuple[int, int]] = (),
+) -> threading.Thread | None:
+    """Record compile markers locally and asynchronously archive cache to persistent volume."""
     local_root_env = os.environ.get("JOYOMNI_CACHE_ROOT", "").strip()
     if not local_root_env or compile_mode == "none":
-        return
+        return None
 
     local_root = Path(local_root_env)
     with contextlib.suppress(OSError):
         local_root.mkdir(parents=True, exist_ok=True)
         (local_root / _CACHE_MODE_MARKER).write_text(f"{compile_mode}\n", encoding="utf-8")
+        existing_local = _parse_shapes_marker(local_root / _CACHE_SHAPES_MARKER)
+        combined = existing_local | {
+            (int(w), int(h)) for w, h in warmed_shapes if int(w) > 0 and int(h) > 0
+        }
+        if combined:
+            (local_root / _CACHE_SHAPES_MARKER).write_text(
+                _format_shapes_marker(combined), encoding="utf-8"
+            )
 
     if not enabled:
-        return
+        return None
 
     volume_root_env = os.environ.get("JOYOMNI_VOLUME_CACHE_ROOT", "").strip()
     if not volume_root_env:
-        return
+        return None
 
     volume_root = Path(volume_root_env)
     try:
         if local_root.resolve() == volume_root.resolve():
-            return
+            return None
     except OSError:
         if str(local_root) == str(volume_root):
-            return
+            return None
 
     thread = threading.Thread(
         target=_persist_compile_cache_archive,
@@ -277,11 +361,88 @@ def _schedule_compile_cache_persist(compile_mode: str, *, enabled: bool) -> None
             "local_cache_root": local_root,
             "volume_cache_root": volume_root,
             "compile_mode": compile_mode,
+            "warmed_shapes": tuple(warmed_shapes),
         },
         name="joyai-cache-persist",
         daemon=True,
     )
     thread.start()
+    return thread
+
+
+class _BufferedTensorSlice:
+    """Minimal `PySafeSlice`-compatible accessor backed by a sequential file read."""
+
+    def __init__(self, opener: _BufferedSafeOpen, name: str, info: dict[str, Any]) -> None:
+        self._opener = opener
+        self._name = name
+        self._info = info
+
+    def get_shape(self) -> list[int]:
+        return [int(dim) for dim in self._info.get("shape", ())]
+
+    def get_dtype(self) -> str:
+        return str(self._info.get("dtype", ""))
+
+    def __getitem__(self, slices: Any) -> Any:
+        return self._opener.get_tensor(self._name)[slices]
+
+
+class _BufferedSafeOpen:
+    """Drop-in `safetensors.safe_open` context manager avoiding `mmap` on FUSE mounts."""
+
+    def __init__(
+        self,
+        filename: str | os.PathLike[str],
+        *,
+        load_bytes_fn: Any,
+        framework: str = "pt",
+        device: Any = "cpu",
+    ) -> None:
+        self._path = Path(filename)
+        self._load_bytes_fn = load_bytes_fn
+        self._framework = framework
+        self._device = device
+        self._tensors: dict[str, Any] | None = None
+
+        with open(self._path, "rb") as fh:
+            len_bytes = fh.read(8)
+            if len(len_bytes) != 8:
+                raise ValueError(f"Corrupt safetensors file (short header): {self._path}")
+            header_len = struct.unpack("<Q", len_bytes)[0]
+            header_raw = fh.read(header_len)
+            if len(header_raw) != header_len:
+                raise ValueError(f"Corrupt safetensors file (truncated header): {self._path}")
+        header = json.loads(header_raw.decode("utf-8"))
+        raw_meta = header.pop("__metadata__", None)
+        self._metadata: dict[str, str] | None = (
+            {str(k): str(v) for k, v in raw_meta.items()} if isinstance(raw_meta, dict) else None
+        )
+        self._header: dict[str, dict[str, Any]] = header
+
+    def __enter__(self) -> _BufferedSafeOpen:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self._tensors = None
+
+    def metadata(self) -> dict[str, str] | None:
+        return self._metadata
+
+    def keys(self) -> list[str]:
+        return list(self._header.keys())
+
+    def _ensure_loaded(self) -> dict[str, Any]:
+        if self._tensors is None:
+            self._tensors = self._load_bytes_fn(self._path.read_bytes())
+        assert self._tensors is not None
+        return self._tensors
+
+    def get_tensor(self, name: str) -> Any:
+        return self._ensure_loaded()[name]
+
+    def get_slice(self, name: str) -> _BufferedTensorSlice:
+        return _BufferedTensorSlice(self, name, self._header[name])
 
 
 @contextlib.contextmanager
@@ -290,40 +451,13 @@ def _patch_fuse_safetensors_loaders(
     disable_mmap: bool,
     mmap_setting: str,
 ) -> Generator[None]:
-    """Avoid `mmap` page-fault storms on FUSE/network mounts for MiMo-VL and xVAE safetensors."""
+    """Avoid `mmap` page-fault storms on FUSE/network mounts for safetensors loaders."""
     if not disable_mmap:
         yield
         return
 
     restorers: list[Any] = []
-
-    try:
-        transformers_mod = importlib.import_module("transformers")
-        qwen_cls = getattr(transformers_mod, "Qwen2_5_VLForConditionalGeneration", None)
-        if qwen_cls is not None and hasattr(qwen_cls, "from_pretrained"):
-            orig_from_pretrained = qwen_cls.from_pretrained
-            try:
-                sig = inspect.signature(orig_from_pretrained)
-                accepts_disable_mmap = "disable_mmap" in sig.parameters or any(
-                    p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-                )
-            except (TypeError, ValueError):
-                accepts_disable_mmap = True
-
-            if accepts_disable_mmap:
-
-                def _from_pretrained_no_mmap(*args: Any, **kwargs: Any) -> Any:
-                    if "disable_mmap" not in kwargs:
-                        try:
-                            return orig_from_pretrained(*args, disable_mmap=True, **kwargs)
-                        except TypeError:
-                            return orig_from_pretrained(*args, **kwargs)
-                    return orig_from_pretrained(*args, **kwargs)
-
-                qwen_cls.from_pretrained = _from_pretrained_no_mmap
-                restorers.append(lambda: setattr(qwen_cls, "from_pretrained", orig_from_pretrained))
-    except Exception:
-        pass
+    load_bytes: Any = None
 
     try:
         st_torch: Any = importlib.import_module("safetensors.torch")
@@ -337,7 +471,57 @@ def _patch_fuse_safetensors_loaders(
                 return orig_load_file(filename, device=device)
 
             st_torch.load_file = _load_file_no_mmap
-            restorers.append(lambda: setattr(st_torch, "load_file", orig_load_file))
+            restorers.append(
+                lambda mod=st_torch, orig=orig_load_file: setattr(mod, "load_file", orig)
+            )
+    except Exception:
+        pass
+
+    try:
+        st_mod: Any = importlib.import_module("safetensors")
+        orig_safe_open = getattr(st_mod, "safe_open", None)
+        if callable(orig_safe_open) and callable(load_bytes):
+
+            def _safe_open_no_mmap(
+                filename: str | os.PathLike[str],
+                framework: str = "pt",
+                device: Any = "cpu",
+            ) -> Any:
+                if (
+                    framework == "pt"
+                    and str(device) == "cpu"
+                    and _should_disable_dit_mmap(str(filename), mmap_setting)
+                ):
+                    return _BufferedSafeOpen(
+                        filename,
+                        load_bytes_fn=load_bytes,
+                        framework=framework,
+                        device=device,
+                    )
+                return orig_safe_open(filename, framework=framework, device=device)
+
+            st_mod.safe_open = _safe_open_no_mmap
+            restorers.append(
+                lambda mod=st_mod, orig=orig_safe_open: setattr(mod, "safe_open", orig)
+            )
+
+            for mod_name in (
+                "transformers.modeling_utils",
+                "transformers.core_model_loading",
+                "diffusers.models.modeling_utils",
+            ):
+                with contextlib.suppress(Exception):
+                    importlib.import_module(mod_name)
+
+            for mod_raw in list(sys.modules.values()):
+                if mod_raw is None or mod_raw is st_mod:
+                    continue
+                mod: Any = mod_raw
+                if getattr(mod, "safe_open", None) is orig_safe_open:
+                    mod.safe_open = _safe_open_no_mmap
+                    restorers.append(
+                        lambda target=mod, orig=orig_safe_open: setattr(target, "safe_open", orig)
+                    )
     except Exception:
         pass
 
@@ -661,7 +845,11 @@ class JoyAIVideoSession(VideoSession):
             if max_inflight and session.inflight_chunks() >= max_inflight:
                 return VideoGateEvent(event_type="dropped", reason="backpressure")
 
-            image = _decode_jpeg(frame.payload)
+            try:
+                image = _decode_jpeg(frame.payload)
+            except (UnidentifiedImageError, OSError, ValueError):
+                logger.warning("Dropping corrupt/undecodable video frame seq=%s", frame.seq)
+                return VideoGateEvent(event_type="dropped", reason="invalid_frame")
             meta = {
                 "seq": frame.seq,
                 "pts_us": frame.pts_us,
@@ -758,6 +946,7 @@ class JoyAIVideoPipeline(VideoPipeline):
         self.settings = settings
         self.infer_lock = threading.Lock()
         self._modules: _JoyAIModules | None = None
+        self._persist_thread: threading.Thread | None = None
 
     def require_modules(self) -> _JoyAIModules:
         """Return loaded JoyAI runtime & serving modules."""
@@ -878,9 +1067,14 @@ class JoyAIVideoPipeline(VideoPipeline):
 
         logger.info("JoyAI runtime loaded and warmed up in %.1fs", time.monotonic() - t0)
 
-        _schedule_compile_cache_persist(
+        warmed_shapes = [(warmup_w, warmup_h)]
+        if self.settings.video_warmup_both_orientations and warmup_w != warmup_h:
+            warmed_shapes.append((warmup_h, warmup_w))
+
+        self._persist_thread = _schedule_compile_cache_persist(
             effective_compile_mode,
             enabled=self.settings.video_persist_compile_cache,
+            warmed_shapes=warmed_shapes,
         )
 
         self._modules = _JoyAIModules(
@@ -897,4 +1091,8 @@ class JoyAIVideoPipeline(VideoPipeline):
         return JoyAIVideoSession(self, config, ref_image)
 
     def close(self) -> None:
+        persist_thread = self._persist_thread
+        self._persist_thread = None
+        if persist_thread is not None and persist_thread.is_alive():
+            persist_thread.join(timeout=30.0)
         self._modules = None
