@@ -60,6 +60,17 @@ const DEFAULT_CONFIG: StudioConfigState = {
   refAudioAssetId: "",
 };
 
+const SESSION_STATUS_RANK: Record<OrchestratedSessionStatus, number> = {
+  provisioning: 0,
+  warming: 1,
+  ready: 2,
+  active: 3,
+  disconnect_grace: 3,
+  stopping: 4,
+  stopped: 5,
+  failed: 5,
+};
+
 function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -103,6 +114,7 @@ export function StudioView() {
   const outputRecorderRef = useRef<LiveOutputRecorder | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
   const hydratedSessionIdRef = useRef<string | null>(null);
+  const autoConnectedSessionIdRef = useRef<string | null>(null);
 
   const [cameras, setCameras] = useState<MediaDeviceOption[]>([]);
   const [microphones, setMicrophones] = useState<MediaDeviceOption[]>([]);
@@ -338,6 +350,7 @@ export function StudioView() {
 
   const connectEngine = useCallback(async (session: SessionDetail) => {
     if (engineClientRef.current) return;
+    autoConnectedSessionIdRef.current = session.id;
     micMonitorRef.current?.stop();
     micMonitorRef.current = null;
 
@@ -345,7 +358,12 @@ export function StudioView() {
     const m = mediaStateRef.current;
 
     const client = new RealtimeSessionClient(session, {
-      onPhaseChange: setStreamPhase,
+      onPhaseChange: (phase) => {
+        setStreamPhase(phase);
+        if (phase === "streaming") {
+          setErrorBanner(null);
+        }
+      },
       onVideoActivityChange: (activity, reason) => {
         setVideoActivity(activity);
         setVideoActivityReason(reason ?? null);
@@ -357,9 +375,11 @@ export function StudioView() {
         setErrorBanner(
           formatFriendlyError(msg, "Your live connection was interrupted. Please try again."),
         ),
-      onStopped: () => {
+      onStopped: (reason) => {
         engineClientRef.current = null;
-        setStreamPhase("disconnected");
+        if (!reason || reason === "Session stopped") {
+          setStreamPhase("disconnected");
+        }
       },
     });
     engineClientRef.current = client;
@@ -392,7 +412,9 @@ export function StudioView() {
     const session = activeSessionRef.current;
     if (!activeSessionId || !session) {
       hydratedSessionIdRef.current = null;
+      autoConnectedSessionIdRef.current = null;
       setSessionStatus(null);
+      setStreamPhase("disconnected");
       setVideoActivity(null);
       setVideoActivityReason(null);
       stopOutputRecordingCleanup();
@@ -403,6 +425,7 @@ export function StudioView() {
       return;
     }
 
+    autoConnectedSessionIdRef.current = null;
     setSessionStatus(session.status);
 
     const curr = configRef.current;
@@ -430,10 +453,12 @@ export function StudioView() {
         if (ev.type === "session_status") {
           setSessionStatus(ev.status);
           if ((ev.status === "ready" || ev.status === "active") && !engineClientRef.current) {
-            void getSession(activeSessionId).then((fresh) => {
-              qc.setQueryData(queryKeys.activeSession, fresh);
-              void connectEngine(fresh);
-            });
+            void getSession(activeSessionId)
+              .then((fresh) => {
+                qc.setQueryData(queryKeys.activeSession, fresh);
+                void connectEngine(fresh);
+              })
+              .catch(() => {});
           }
           if (TERMINAL_SESSION_STATUSES.has(ev.status)) {
             stopOutputRecordingCleanup();
@@ -444,10 +469,12 @@ export function StudioView() {
         } else if (ev.type === "session_ready") {
           setSessionStatus(ev.status);
           if (!engineClientRef.current) {
-            void getSession(activeSessionId).then((fresh) => {
-              qc.setQueryData(queryKeys.activeSession, fresh);
-              void connectEngine(fresh);
-            });
+            void getSession(activeSessionId)
+              .then((fresh) => {
+                qc.setQueryData(queryKeys.activeSession, fresh);
+                void connectEngine(fresh);
+              })
+              .catch(() => {});
           }
         } else if (ev.type === "session_stopped") {
           stopOutputRecordingCleanup();
@@ -478,6 +505,26 @@ export function StudioView() {
       unsubscribe();
     };
   }, [activeSessionId, connectEngine, patchConfig, qc, stopOutputRecordingCleanup]);
+
+  // Fallback readiness sync when /sessions/active polling observes readiness (e.g. missed SSE)
+  useEffect(() => {
+    const session = activeSessionRef.current;
+    if (!activeSessionId || !session) return;
+    setSessionStatus((prev) =>
+      prev === null || SESSION_STATUS_RANK[session.status] >= SESSION_STATUS_RANK[prev]
+        ? session.status
+        : prev,
+    );
+    if (
+      (session.status === "ready" ||
+        session.status === "active" ||
+        session.status === "disconnect_grace") &&
+      !engineClientRef.current &&
+      autoConnectedSessionIdRef.current !== session.id
+    ) {
+      void connectEngine(session);
+    }
+  }, [activeSessionId, activeSession?.status, connectEngine]);
 
   async function handleStartSession() {
     if (!canGoLive) return;

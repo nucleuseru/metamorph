@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
-from metamorph_engine.lifecycle import LifecycleState
-from metamorph_engine.main import create_app
+from metamorph_engine.lifecycle import InstanceLifecycleManager, LifecycleState
+from metamorph_engine.main import configure_engine_logging, create_app
 from starlette.websockets import WebSocketDisconnect
 from tests.conftest import (
     WebhookRecorder,
@@ -291,3 +293,50 @@ def test_async_startup_failure_triggers_shutdown_webhook(
         and "startup_failed: missing cuda weights" in e.payload["reason"]
         for e in recorder.events
     )
+
+
+@pytest.mark.asyncio
+async def test_runpod_proxy_wait_defers_ready_webhook_until_proxy_is_reachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RUNPOD_POD_ID", "podfast123")
+    recorder = WebhookRecorder(secret="hook-secret")
+    probe_attempts: list[str] = []
+
+    def _proxy_handler(request: httpx.Request) -> httpx.Response:
+        probe_attempts.append(str(request.url))
+        if len(probe_attempts) < 3:
+            return httpx.Response(502, text="Bad Gateway")
+        return httpx.Response(200, json={"status": "ok"})
+
+    settings = build_test_settings(
+        startup_idle_timeout_s=30.0,
+        lifecycle_webhook_url="https://api.example.com/hooks",
+        lifecycle_webhook_secret="hook-secret",
+    )
+    lifecycle = InstanceLifecycleManager(
+        settings,
+        webhook_transport=recorder,
+        proxy_probe_transport=httpx.MockTransport(_proxy_handler),
+    )
+
+    orig_wait = lifecycle._wait_for_runpod_proxy_ready
+
+    async def _fast_wait() -> None:
+        await orig_wait(max_wait_s=5.0, poll_interval_s=0.02)
+
+    monkeypatch.setattr(lifecycle, "_wait_for_runpod_proxy_ready", _fast_wait)
+    await lifecycle.mark_ready()
+    await lifecycle.cancel_timers()
+
+    assert len(probe_attempts) == 3
+    assert probe_attempts[0] == "https://podfast123-8000.proxy.runpod.net/health"
+    assert [e.payload["event"] for e in recorder.events] == ["ready"]
+
+
+def test_configure_engine_logging_enables_info_logs_on_package_logger() -> None:
+    configure_engine_logging("info")
+    pkg_logger = logging.getLogger("metamorph_engine")
+    assert pkg_logger.level == logging.INFO
+    assert len(pkg_logger.handlers) >= 1
+    assert pkg_logger.propagate is False
