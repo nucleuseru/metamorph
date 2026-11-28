@@ -40,25 +40,25 @@ describe("GPU providers & failover", () => {
 
       if (method === "POST" && url.endsWith("/pods")) {
         const parsed = body as { gpu?: { id?: string } };
-        if (parsed.gpu?.id === "NVIDIA L4") {
+        if (parsed.gpu?.id === "NVIDIA GeForce RTX 3070") {
           return new Response(JSON.stringify({ error: "out of stock" }), { status: 422 });
         }
         return new Response(
           JSON.stringify({
-            id: "pod-4090-1",
+            id: "pod-3080-1",
             name: "metamorph-inst-1",
             status: "PROVISIONING",
-            cost: 0.69,
+            cost: 0.25,
             gpu: { id: parsed.gpu?.id, count: 1 },
           }),
           { status: 201, headers: { "content-type": "application/json" } },
         );
       }
 
-      if (method === "GET" && url.endsWith("/pods/pod-4090-1")) {
+      if (method === "GET" && url.endsWith("/pods/pod-3080-1")) {
         return new Response(
           JSON.stringify({
-            id: "pod-4090-1",
+            id: "pod-3080-1",
             name: "metamorph-inst-1",
             status: "RUNNING",
           }),
@@ -71,7 +71,7 @@ describe("GPU providers & failover", () => {
           JSON.stringify({
             pods: [
               {
-                id: "pod-4090-1",
+                id: "pod-3080-1",
                 name: "metamorph-inst-1",
                 status: "RUNNING",
                 createdAt: "2026-11-24T10:00:00.000Z",
@@ -87,7 +87,7 @@ describe("GPU providers & failover", () => {
         );
       }
 
-      if (method === "DELETE" && url.endsWith("/pods/pod-4090-1")) {
+      if (method === "DELETE" && url.endsWith("/pods/pod-3080-1")) {
         return new Response(null, { status: 204 });
       }
 
@@ -118,11 +118,11 @@ describe("GPU providers & failover", () => {
         });
 
         assert.equal(provisioned.provider, "runpod");
-        assert.equal(provisioned.providerInstanceId, "pod-4090-1");
-        assert.equal(provisioned.gpuType, "NVIDIA GeForce RTX 4090");
-        assert.equal(provisioned.hourlyRateUsd, 0.69);
-        assert.equal(provisioned.httpUrl, "https://pod-4090-1-8000.proxy.runpod.net");
-        assert.equal(provisioned.wsUrl, "wss://pod-4090-1-8000.proxy.runpod.net/ws/session");
+        assert.equal(provisioned.providerInstanceId, "pod-3080-1");
+        assert.equal(provisioned.gpuType, "NVIDIA GeForce RTX 3080");
+        assert.equal(provisioned.hourlyRateUsd, 0.25);
+        assert.equal(provisioned.httpUrl, "https://pod-3080-1-8000.proxy.runpod.net");
+        assert.equal(provisioned.wsUrl, "wss://pod-3080-1-8000.proxy.runpod.net/ws/session");
         assert.equal(provisioned.tlsSupported, true);
 
         const secondReq = requests[1]!.body as {
@@ -166,14 +166,14 @@ describe("GPU providers & failover", () => {
           global: [{ volumeId: "gsb_123", path: "/models" }],
         });
 
-        const status = yield* runpod.getStatus("pod-4090-1");
+        const status = yield* runpod.getStatus("pod-3080-1");
         assert.equal(status.status, "running");
 
         const managed = yield* runpod.listManaged;
         assert.equal(managed.length, 1);
         assert.equal(managed[0]!.instanceId, "inst-1");
 
-        yield* runpod.terminate("pod-4090-1");
+        yield* runpod.terminate("pod-3080-1");
       }).pipe(Effect.provide(clientLayer)),
     );
   });

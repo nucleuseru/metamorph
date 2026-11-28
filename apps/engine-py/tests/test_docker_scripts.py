@@ -142,8 +142,8 @@ def test_github_workflow_builds_and_deploys_all_targets() -> None:
     voice_section = docker_content.split("AS voice-builder", 1)[1].split(
         "# Stage 3: Full GPU builder", 1
     )[0]
-    for forbidden in ("ffmpeg", "sox", "librosa", "soundfile"):
-        assert forbidden not in voice_section, f"voice stage should not install {forbidden}"
+    for forbidden in ("ffmpeg", "sox", "librosa", "soundfile", "torch/bin"):
+        assert forbidden not in voice_section, f"voice stage should not contain {forbidden}"
 
 
 def test_download_models_dry_run_covers_entrypoint_checkpoints(tmp_path: Path) -> None:

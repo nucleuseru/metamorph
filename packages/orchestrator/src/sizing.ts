@@ -25,10 +25,14 @@ export interface ResolveHardwareInput {
 }
 
 const DEFAULT_VOICE_GPUS: ReadonlyArray<string> = [
+  "NVIDIA GeForce RTX 3070",
+  "NVIDIA GeForce RTX 3080",
+  "NVIDIA GeForce RTX 4070 Ti",
+  "NVIDIA RTX 2000 Ada Generation",
+  "NVIDIA RTX A4000",
+  "NVIDIA RTX 4000 Ada Generation",
   "NVIDIA L4",
   "NVIDIA GeForce RTX 4090",
-  "NVIDIA RTX 4000 Ada Generation",
-  "NVIDIA RTX A4000",
 ];
 
 const DEFAULT_VIDEO_STANDARD_GPUS: ReadonlyArray<string> = [
@@ -65,8 +69,8 @@ export function resolveHardwareProfile(input: ResolveHardwareInput): HardwareSpe
 
   if (enableVoice && !enableVideo) {
     imageTarget = "voice";
-    minVramGb = 16;
-    diskGb = 25;
+    minVramGb = 8;
+    diskGb = 15;
     runpodGpuIds = input.config.voiceGpuIds ?? DEFAULT_VOICE_GPUS;
   } else if (enableVideo && !enableVoice) {
     imageTarget = "full";

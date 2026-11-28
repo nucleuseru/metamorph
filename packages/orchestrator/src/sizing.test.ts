@@ -5,7 +5,7 @@ import { defaultOrchestratorConfig } from "./config.ts";
 import { buildEngineEnv, escapePemForEnv, resolveHardwareProfile } from "./sizing.ts";
 
 describe("Hardware sizing and engine env generation", () => {
-  test("selects :voice target and >=16GB VRAM for voice-only profile", () => {
+  test("selects :voice target, >=8GB VRAM, and smallest-first GPUs for voice-only profile", () => {
     const hw = resolveHardwareProfile({
       modalities: ["voice"],
       quality: "standard",
@@ -13,10 +13,15 @@ describe("Hardware sizing and engine env generation", () => {
     });
     assert.equal(hw.imageTarget, "voice");
     assert.equal(hw.image, "metamorph-engine:voice");
-    assert.equal(hw.minVramGb, 16);
+    assert.equal(hw.minVramGb, 8);
+    assert.equal(hw.diskGb, 15);
     assert.equal(hw.minCudaVersion, "12.8");
     assert.equal(hw.enableVoice, true);
     assert.equal(hw.enableVideo, false);
+    assert.equal(hw.runpodGpuIds[0], "NVIDIA GeForce RTX 3070");
+    assert.ok(hw.runpodGpuIds.includes("NVIDIA RTX A4000"));
+    assert.ok(hw.runpodGpuIds.includes("NVIDIA L4"));
+    assert.ok(hw.runpodGpuIds.includes("NVIDIA GeForce RTX 4090"));
   });
 
   test("selects :full target and >=32GB / >=48GB VRAM for video and dual-modality profiles", () => {
