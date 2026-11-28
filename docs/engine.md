@@ -82,11 +82,11 @@ Claims:
 
 Images are built from the **repository root** via [engine-docker.yml](../.github/workflows/engine-docker.yml) (or `docker build -f apps/engine-py/Dockerfile --target <target> .`):
 
-| Target  | Base Image                                   | Purpose                                                                                                |
-| :------ | :------------------------------------------- | :----------------------------------------------------------------------------------------------------- |
-| `full`  | `nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04` | Voice + RV2V/V2V GPU image (`JoyAI-Video-Edit` + `joyomni_ops` FP8 + `Seed-VC`)                        |
-| `voice` | `python:3.12-slim`                           | Slim voice-only image (`ENGINE_ENABLE_VIDEO=false`; self-contained CUDA 12.8 via PyTorch cu128 wheels) |
-| `mock`  | `python:3.12-slim`                           | Lightweight CPU mock image (`ENGINE_BACKEND=mock`) for local `apps/api` dev                            |
+| Target  | Base Image         | Purpose                                                                                                           |
+| :------ | :----------------- | :---------------------------------------------------------------------------------------------------------------- |
+| `full`  | `ubuntu:22.04`     | Voice + RV2V/V2V GPU image (`JoyAI-Video-Edit` + `joyomni_ops` FP8 + `Seed-VC`; built in CUDA 12.8 devel builder) |
+| `voice` | `python:3.12-slim` | Slim voice-only image (`ENGINE_ENABLE_VIDEO=false`; self-contained CUDA 12.8 via PyTorch cu128 wheels)            |
+| `mock`  | `python:3.12-slim` | Lightweight CPU mock image (`ENGINE_BACKEND=mock`) for local `apps/api` dev                                       |
 
 ```bash
 # Local CPU mock image
