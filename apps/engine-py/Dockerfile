@@ -111,7 +111,6 @@ RUN uv sync --frozen --no-dev --inexact --package metamorph-engine \
         /app/.venv/lib/python3.12/site-packages/torch/include \
         /app/.venv/lib/python3.12/site-packages/torch/test \
         /app/.venv/lib/python3.12/site-packages/torch/share \
-        /app/.venv/lib/python3.12/site-packages/torch/bin \
         /app/.venv/lib/python3.12/site-packages/nvidia/*/include \
         /app/.venv/lib/python3.12/site-packages/nvidia/*/bin \
     && find /app/.venv/lib/python3.12/site-packages -type f -name '*.a' -delete \
